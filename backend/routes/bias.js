@@ -4,8 +4,8 @@
  * POST /bias
  *  Body: { transcript: string }
  *
- *  Pipeline (Sprint 2):
- *   1. Send transcript to Claude with the bias analysis system prompt
+ *  Pipeline:
+ *   1. Send transcript to Groq (llama-3.3-70b) with the bias analysis prompt
  *   2. Parse and validate the structured JSON response
  *   3. Return the result to the extension
  *
@@ -18,28 +18,37 @@
  */
 
 import { Router } from 'express';
-
-// TODO (Sprint 2): Import Anthropic SDK
-// import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 
 const router = Router();
 
-// TODO (Sprint 2): Initialise the Anthropic client
-// const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Groq client — uses the OpenAI-compatible API
+const groq = new OpenAI({
+  apiKey:  process.env.GROQ_API_KEY,
+  baseURL: 'https://api.groq.com/openai/v1',
+});
+
+const MODEL    = 'llama-3.3-70b-versatile';
+const MAX_CHARS = 4000;
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
 const BIAS_SYSTEM_PROMPT = `
 You are a neutral media analysis assistant. Given a transcript excerpt, analyze the
-language for political leaning and emotional charge. Do not factor in the topic itself —
-only analyze word choice, framing, and tone. Return only valid JSON — no markdown,
-no explanation outside the JSON.
+language for political leaning and emotional charge.
 
-Output format (object):
+Rules:
+- Analyze ONLY word choice, framing, and tone — not the topic itself
+- lean_score: -1.0 = strongly left-leaning language, 0.0 = neutral, +1.0 = strongly right-leaning
+- emotion_score: 0.0 = calm/neutral language, 1.0 = highly emotional/charged language
+- framing_label: one short plain-English sentence describing the dominant framing or tone
+- Return ONLY valid JSON — no markdown, no explanation outside the JSON
+
+Output format:
 {
-  "lean_score":    <-1.0 to +1.0>,
+  "lean_score":    <-1.0 to 1.0>,
   "emotion_score": <0.0 to 1.0>,
-  "framing_label": "<short plain-English description, e.g. 'Emotionally charged language detected'>"
+  "framing_label": "<short description>"
 }
 `.trim();
 
@@ -49,46 +58,44 @@ router.post('/', async (req, res, next) => {
   try {
     const { transcript } = req.body;
 
-    // ── Input validation ──
-    if (!transcript || typeof transcript !== 'string') {
-      return res.status(400).json({ error: 'Request body must include a "transcript" string.' });
+    if (!transcript || typeof transcript !== 'string' || transcript.trim().length === 0) {
+      return res.status(400).json({ error: 'Request body must include a non-empty "transcript" string.' });
     }
 
-    if (transcript.trim().length === 0) {
-      return res.status(400).json({ error: '"transcript" must not be empty.' });
-    }
-
-    // Limit input size
-    const MAX_CHARS = 4000;
     const safeTranscript = transcript.slice(0, MAX_CHARS);
 
-    // TODO (Sprint 2): Call Claude for bias analysis
-    // const response = await anthropic.messages.create({
-    //   model: 'claude-sonnet-4-20250514',
-    //   max_tokens: 256,
-    //   system: BIAS_SYSTEM_PROMPT,
-    //   messages: [{ role: 'user', content: `Transcript:\n${safeTranscript}` }],
-    // });
-    //
-    // // Claude is instructed to return only JSON — parse it directly
-    // const result = JSON.parse(response.content[0].text);
-    //
-    // // Clamp values to expected ranges before returning
-    // return res.json({
-    //   lean_score:    Math.max(-1, Math.min(1, result.lean_score)),
-    //   emotion_score: Math.max(0,  Math.min(1, result.emotion_score)),
-    //   framing_label: String(result.framing_label).slice(0, 200),
-    // });
+    console.log(`[/bias] Analysing ${safeTranscript.length} chars...`);
 
-    // ── STUB response ──
-    console.log(`[/bias] Received transcript (${safeTranscript.length} chars) — stub mode`);
+    const response = await groq.chat.completions.create({
+      model:      MODEL,
+      max_tokens: 128,
+      messages: [
+        { role: 'system', content: BIAS_SYSTEM_PROMPT },
+        { role: 'user',   content: `Transcript:\n${safeTranscript}` },
+      ],
+    });
+
+    const raw = response.choices[0].message.content;
+    // Strip markdown code fences if the model wraps its response
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+
+    let result;
+    try {
+      result = JSON.parse(cleaned);
+    } catch {
+      console.warn('[/bias] Could not parse JSON response:', raw.slice(0, 100));
+      return res.json({ lean_score: 0.0, emotion_score: 0.0, framing_label: 'Analysis unavailable' });
+    }
+
+    // Clamp values to expected ranges
     return res.json({
-      lean_score:    0.0,
-      emotion_score: 0.0,
-      framing_label: 'Neutral (stub — real analysis coming in Sprint 2)',
+      lean_score:    Math.max(-1, Math.min(1, Number(result.lean_score)   || 0)),
+      emotion_score: Math.max(0,  Math.min(1, Number(result.emotion_score) || 0)),
+      framing_label: String(result.framing_label || '—').slice(0, 200),
     });
 
   } catch (err) {
+    console.error('[/bias] Error:', err.message);
     next(err);
   }
 });

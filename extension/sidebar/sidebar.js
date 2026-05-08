@@ -134,7 +134,8 @@
     const { claim, verdict, confidence = 0, sources = [] } = item;
 
     const card = document.createElement('div');
-    card.className = 'fl-claim-card';
+    // Add verdict class to card for the left-border color
+    card.className = `fl-claim-card ${verdict.toLowerCase()}`;
 
     // ── Header: claim text + verdict badge ──
     const header = document.createElement('div');
@@ -159,17 +160,23 @@
     confFill.style.width = `${Math.round(confidence * 100)}%`;
     confBar.appendChild(confFill);
 
-    // ── Source links ──
+    // ── Source links — show domain name instead of "Source N" ──
     const sourcesEl = document.createElement('div');
     sourcesEl.className = 'fl-sources';
-    sources.forEach((url, i) => {
-      const link = document.createElement('a');
-      link.className = 'fl-source-link';
-      link.href = url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = `Source ${i + 1}`;
-      sourcesEl.appendChild(link);
+    sources.forEach((url) => {
+      try {
+        const domain = new URL(url).hostname.replace(/^www\./, '');
+        const link = document.createElement('a');
+        link.className = 'fl-source-link';
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = domain;
+        link.title = url; // full URL on hover
+        sourcesEl.appendChild(link);
+      } catch {
+        // Skip malformed URLs
+      }
     });
 
     card.appendChild(header);

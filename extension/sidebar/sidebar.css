@@ -24,9 +24,9 @@
   --false:         #f44336;
   --unverified:    #ff9800;
 
-  /* Bias meter */
-  --bias-left:     #e53935;
-  --bias-right:    #1e88e5;
+  /* Bias meter — standard US political colors */
+  --bias-left:     #2196f3;   /* blue  — left leaning */
+  --bias-right:    #f44336;   /* red   — right leaning */
   --bias-center:   #37474f;
 
   --radius:        8px;
@@ -177,9 +177,14 @@ body {
 .fl-claim-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border); /* overridden per verdict below */
   border-radius: var(--radius);
   padding: 10px 12px;
 }
+
+.fl-claim-card.true       { border-left-color: var(--true); }
+.fl-claim-card.false      { border-left-color: var(--false); }
+.fl-claim-card.unverified { border-left-color: var(--unverified); }
 
 .fl-claim-header {
   display: flex;

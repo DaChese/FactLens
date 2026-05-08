@@ -267,44 +267,25 @@ async function handleAudioChunk(base64, mimeType, tabId) {
 async function handleTranscript(tabId, text) {
   broadcast({ type: 'TRANSCRIPT', payload: text });
 
-  // TODO (Sprint 3): Replace stubs with real Claude + Tavily calls
-  // const [factCheckResult, biasResult] = await Promise.allSettled([
-  //   fetchFactCheck(text),
-  //   fetchBiasAnalysis(text),
-  // ]);
-  // if (factCheckResult.status === 'fulfilled') {
-  //   broadcast({ type: 'FACTCHECK', payload: factCheckResult.value });
-  // } else {
-  //   broadcast({ type: 'ERROR', payload: 'Fact-check failed: ' + factCheckResult.reason.message });
-  // }
-  // if (biasResult.status === 'fulfilled') {
-  //   broadcast({ type: 'BIAS', payload: biasResult.value });
-  // } else {
-  //   broadcast({ type: 'ERROR', payload: 'Bias analysis failed: ' + biasResult.reason.message });
-  // }
+  const [factCheckResult, biasResult] = await Promise.allSettled([
+    fetchFactCheck(text),
+    fetchBiasAnalysis(text),
+  ]);
 
-  // ── STUB responses (Sprint 3 will replace these) ──
-  broadcast({
-    type: 'FACTCHECK',
-    payload: [{
-      claim:      text.slice(0, 80) + (text.length > 80 ? '…' : ''),
-      verdict:    'Unverified',
-      confidence: 0.0,
-      sources:    [],
-    }],
-  });
+  if (factCheckResult.status === 'fulfilled') {
+    broadcast({ type: 'FACTCHECK', payload: factCheckResult.value });
+  } else {
+    broadcast({ type: 'ERROR', payload: 'Fact-check failed: ' + factCheckResult.reason.message });
+  }
 
-  broadcast({
-    type: 'BIAS',
-    payload: {
-      lean_score:    0.0,
-      emotion_score: 0.0,
-      framing_label: 'Analysis coming in Sprint 3',
-    },
-  });
+  if (biasResult.status === 'fulfilled') {
+    broadcast({ type: 'BIAS', payload: biasResult.value });
+  } else {
+    broadcast({ type: 'ERROR', payload: 'Bias analysis failed: ' + biasResult.reason.message });
+  }
 }
 
-// ─── Backend API Calls (Sprint 3) ────────────────────────────────────────────
+// ─── Backend API Calls ───────────────────────────────────────────────────────
 
 async function fetchFactCheck(text) {
   const res = await fetch(`${BACKEND_URL}/factcheck`, {
