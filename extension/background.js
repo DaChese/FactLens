@@ -30,8 +30,8 @@ const BUFFER_MAX_WORDS = 150;
 // Independent of the audio chunk interval — runs every 20s so analysis feels live.
 const ANALYSIS_INTERVAL_MS = 20000;
 
-// Store detected language per tab so the analysis interval can use it
-const detectedLanguages = {}; // tabId → language string e.g. "english" | "spanish"
+// Last transcript per tab — used to deduplicate overlapping Whisper results
+const lastTranscripts = {}; // tabId → last transcript string
 
 // Module-level map of tabId → analysis interval ID
 const analysisIntervals = {};
@@ -139,6 +139,7 @@ async function stopSession(tabId) {
   // Clear the rolling buffer and language
   delete transcriptBuffers[tabId];
   delete detectedLanguages[tabId];
+  delete lastTranscripts[tabId];
 
   // Tell the offscreen doc to stop recording
   chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }).catch(() => {});
@@ -277,13 +278,63 @@ async function handleAudioChunk(base64, mimeType, tabId) {
     }
 
     console.log(`[FactLens] Transcript (${language ?? 'unknown'}): "${text.slice(0, 80)}"`);
-    await handleTranscript(tabId, text.trim(), language);
+
+    // ── Overlap deduplication ──
+    // Because blobs overlap, Whisper may return text we already showed.
+    // Find the longest suffix of the previous transcript that matches a
+    // prefix of the new one, and only show the genuinely new portion.
+    const newText = deduplicateOverlap(lastTranscripts[tabId] ?? '', text);
+    lastTranscripts[tabId] = text;
+
+    if (!newText || newText.trim().length === 0) {
+      broadcast({ type: 'STATUS', payload: 'listening' });
+      return;
+    }
+
+    await handleTranscript(tabId, newText.trim(), language);
 
   } catch (err) {
     console.error('[FactLens] Audio chunk error:', err.message);
     broadcast({ type: 'ERROR',  payload: `Transcription failed: ${err.message}` });
     broadcast({ type: 'STATUS', payload: 'listening' });
   }
+}
+
+// ─── Overlap Deduplication ───────────────────────────────────────────────────
+
+/**
+ * Given the previous transcript and the new one (which overlaps with it),
+ * return only the genuinely new portion of the new transcript.
+ *
+ * Strategy: find the longest suffix of `prev` that appears as a prefix
+ * of `next` (word-level comparison), then return everything after that match.
+ *
+ * @param {string} prev - previous transcript text
+ * @param {string} next - new transcript text (may start with repeated words)
+ * @returns {string} - only the new words not already shown
+ */
+function deduplicateOverlap(prev, next) {
+  if (!prev) return next;
+
+  const prevWords = prev.trim().split(/\s+/);
+  const nextWords = next.trim().split(/\s+/);
+
+  // Try matching the last N words of prev against the first N words of next
+  // Start with the longest possible overlap and work down
+  const maxOverlap = Math.min(prevWords.length, nextWords.length, 20);
+
+  for (let overlap = maxOverlap; overlap >= 3; overlap--) {
+    const prevSuffix = prevWords.slice(-overlap).join(' ').toLowerCase();
+    const nextPrefix = nextWords.slice(0, overlap).join(' ').toLowerCase();
+    if (prevSuffix === nextPrefix) {
+      // Found the overlap — return only the new words after it
+      const newWords = nextWords.slice(overlap);
+      return newWords.join(' ');
+    }
+  }
+
+  // No significant overlap found — return the full new transcript
+  return next;
 }
 
 // ─── Transcript Handling ─────────────────────────────────────────────────────

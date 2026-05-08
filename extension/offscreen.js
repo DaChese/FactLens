@@ -5,25 +5,50 @@
  * Has access to getUserMedia and MediaRecorder — things the service worker
  * cannot use in MV3.
  *
- * Message protocol with background.js (via chrome.runtime.onMessage):
+ * Audio pipeline:
+ *  - MediaRecorder fires ondataavailable every TIMESLICE_MS (500ms)
+ *  - Raw data chunks are kept in a ring buffer (RING_SIZE slots)
+ *  - Every SEND_EVERY slots, we assemble the full ring buffer into a blob
+ *    and send it for transcription
+ *  - Because the ring buffer always contains the last N seconds of audio,
+ *    each blob overlaps with the previous one — no words get dropped at
+ *    chunk boundaries
  *
+ * Example with TIMESLICE_MS=500, RING_SIZE=12 (6s window), SEND_EVERY=6:
+ *   t=0s:  ring=[0..5]   → send 6s blob
+ *   t=3s:  ring=[6..11]  → send 6s blob (shares 3s with previous)
+ *   t=6s:  ring=[12..17] → send 6s blob (shares 3s with previous)
+ *
+ * Message protocol with background.js (via chrome.runtime.onMessage):
  *  Incoming:
  *   { type: 'START_RECORDING', streamId: string, tabId: number }
  *   { type: 'STOP_RECORDING' }
- *
- *  Outgoing (sent back to background.js):
- *   { type: 'AUDIO_CHUNK',  payload: string (base64), mimeType: string, tabId: number }
- *   { type: 'ERROR',        payload: string, tabId: number }
- *   { type: 'STATUS',       payload: string, tabId: number }
+ *  Outgoing:
+ *   { type: 'AUDIO_CHUNK', payload: string (base64), mimeType: string, tabId: number }
+ *   { type: 'ERROR',       payload: string, tabId: number }
+ *   { type: 'STATUS',      payload: string, tabId: number }
  */
 
-const CHUNK_DURATION_MS = 5000;  // 5s chunks — faster transcription
-const OVERLAP_MS        = 2000;  // start next chunk 2s before current ends (sliding window)
+// How often MediaRecorder fires ondataavailable (ms)
+const TIMESLICE_MS = 500;
+
+// How many timeslice chunks to keep in the ring buffer.
+// RING_SIZE * TIMESLICE_MS = total audio window sent to Whisper.
+// 12 * 500ms = 6 seconds — enough context for accurate transcription.
+const RING_SIZE = 12;
+
+// Send a blob every N new timeslice chunks.
+// SEND_EVERY * TIMESLICE_MS = how often a new transcript arrives.
+// 6 * 500ms = every 3 seconds — feels live, with 3s of overlap from previous blob.
+const SEND_EVERY = 6;
 
 let mediaRecorder = null;
 let audioContext  = null;
 let currentTabId  = null;
-let chunks        = [];
+
+// Ring buffer of raw Blob chunks from MediaRecorder
+let ringBuffer  = [];
+let chunksSince = 0; // how many new chunks since last send
 
 // ─── Message Handler ─────────────────────────────────────────────────────────
 
@@ -42,21 +67,19 @@ chrome.runtime.onMessage.addListener((message) => {
 
 /**
  * Start capturing audio using the stream ID provided by background.js.
- * The stream ID comes from chrome.tabCapture.getMediaStreamId() and is
- * passed to getUserMedia via the chromeMediaSourceId constraint.
- *
  * @param {string} streamId
  * @param {number} tabId
  */
 async function startRecording(streamId, tabId) {
   currentTabId = tabId;
+  ringBuffer   = [];
+  chunksSince  = 0;
 
   try {
-    // Use the stream ID to get the actual MediaStream
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         mandatory: {
-          chromeMediaSource: 'tab',
+          chromeMediaSource:   'tab',
           chromeMediaSourceId: streamId,
         },
       },
@@ -68,61 +91,48 @@ async function startRecording(streamId, tabId) {
       : 'audio/webm';
 
     // ── Audio passthrough ──
-    // Connect the captured stream to the audio output so the user can still
-    // hear the tab. Without this the captured stream is consumed silently.
-    audioContext   = new AudioContext();
-    const source   = audioContext.createMediaStreamSource(stream);
-    source.connect(audioContext.destination);
+    // Route the captured stream to speakers so the user can still hear the tab.
+    audioContext = new AudioContext();
+    audioContext.createMediaStreamSource(stream).connect(audioContext.destination);
 
+    // ── MediaRecorder with timeslice ──
+    // ondataavailable fires every TIMESLICE_MS with a small chunk of audio.
+    // We accumulate these into a ring buffer and assemble overlapping blobs.
     mediaRecorder = new MediaRecorder(stream, { mimeType });
-    chunks = [];
 
     mediaRecorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) {
-        chunks.push(event.data);
+      if (!event.data || event.data.size === 0) return;
+
+      // Add to ring buffer, drop oldest chunk if full
+      ringBuffer.push(event.data);
+      if (ringBuffer.length > RING_SIZE) {
+        ringBuffer.shift();
       }
-    };
 
-    mediaRecorder.onstop = async () => {
-      if (chunks.length === 0) return;
+      chunksSince++;
 
-      const blob = new Blob(chunks, { type: mimeType });
-      chunks = [];
-
-      // Send this chunk for transcription (non-blocking — don't await)
-      sendAudioChunk(blob, tabId);
-
-      // Sliding window: start the next recording slice immediately
-      // so there's no gap between chunks. The overlap means sentences
-      // that straddle a chunk boundary get captured in both chunks,
-      // giving Whisper full context on each side.
-      if (mediaRecorder && mediaRecorder.stream.active) {
-        chunks = [];
-        mediaRecorder.start();
-        // Stop after full chunk duration
-        setTimeout(() => {
-          if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
-        }, CHUNK_DURATION_MS);
+      // Every SEND_EVERY new chunks, assemble and send the full ring buffer
+      if (chunksSince >= SEND_EVERY && ringBuffer.length >= RING_SIZE) {
+        chunksSince = 0;
+        const blob = new Blob(ringBuffer, { type: mimeType });
+        sendAudioChunk(blob, tabId);
       }
     };
 
     mediaRecorder.onerror = (event) => {
-      sendToBackground({ type: 'ERROR', payload: `Recorder error: ${event.error?.message}`, tabId });
+      sendToBackground({
+        type:    'ERROR',
+        payload: `Recorder error: ${event.error?.message}`,
+        tabId,
+      });
     };
 
-    // Stop when the tab's audio track ends
-    stream.getAudioTracks()[0]?.addEventListener('ended', () => {
-      stopRecording();
-    });
+    // Stop when the tab's audio track ends (tab closed, muted, etc.)
+    stream.getAudioTracks()[0]?.addEventListener('ended', () => stopRecording());
 
-    // Start first slice — stop after CHUNK_DURATION_MS
-    // The onstop handler immediately starts the next slice (sliding window)
-    mediaRecorder.start();
-    setTimeout(() => {
-      if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
-    }, CHUNK_DURATION_MS);
-
-    console.log(`[FactLens Offscreen] Recording started (${mimeType})`);
+    // Start recording — timeslice fires ondataavailable every TIMESLICE_MS
+    mediaRecorder.start(TIMESLICE_MS);
+    console.log(`[FactLens Offscreen] Recording started (${mimeType}, ${TIMESLICE_MS}ms timeslice)`);
 
   } catch (err) {
     console.error('[FactLens Offscreen] getUserMedia failed:', err.message);
@@ -131,54 +141,48 @@ async function startRecording(streamId, tabId) {
 }
 
 /**
- * Stop the current recording session.
+ * Stop the current recording session and release resources.
  */
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
   }
-  // Close the AudioContext to release the audio output connection
   if (audioContext) {
     audioContext.close();
     audioContext = null;
   }
   mediaRecorder = null;
   currentTabId  = null;
-  chunks        = [];
+  ringBuffer    = [];
+  chunksSince   = 0;
   console.log('[FactLens Offscreen] Recording stopped');
 }
 
 // ─── Transcription ───────────────────────────────────────────────────────────
 
 /**
- * Send an audio blob to background.js as base64.
- * background.js handles the actual fetch to the backend — it has reliable
- * network access whereas offscreen documents can have fetch restrictions.
+ * Encode an audio blob as base64 and send to background.js for transcription.
+ * We send via the message bus rather than fetching directly because offscreen
+ * documents have unreliable network access to localhost.
  * @param {Blob} blob
  * @param {number} tabId
  */
 async function sendAudioChunk(blob, tabId) {
-  // Skip tiny blobs (silence)
-  if (blob.size < 1000) {
-    console.log('[FactLens Offscreen] Chunk too small, skipping');
-    return;
-  }
+  if (blob.size < 1000) return; // skip silence
 
   sendToBackground({ type: 'STATUS', payload: 'processing', tabId });
 
-  // Convert blob to base64 so it can be sent over the message bus.
-  // We chunk the Uint8Array conversion to avoid call stack overflow on
-  // large buffers (spread operator crashes above ~250KB on some engines).
+  // Encode to base64 in 8KB chunks to avoid call stack overflow on large buffers
   const arrayBuffer = await blob.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
+  const bytes       = new Uint8Array(arrayBuffer);
   let binary = '';
-  const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
   }
   const base64 = btoa(binary);
 
-  console.log(`[FactLens Offscreen] Sending chunk: ${blob.size} bytes as base64 (${base64.length} chars)`);
+  console.log(`[FactLens Offscreen] Sending ${blob.size} bytes (${(blob.size / 1024).toFixed(0)} KB)`);
+
   sendToBackground({
     type:     'AUDIO_CHUNK',
     payload:  base64,
@@ -189,10 +193,6 @@ async function sendAudioChunk(blob, tabId) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/**
- * Send a message back to background.js.
- * @param {object} message
- */
 function sendToBackground(message) {
   chrome.runtime.sendMessage(message).catch((err) => {
     console.warn('[FactLens Offscreen] sendToBackground error:', err.message);

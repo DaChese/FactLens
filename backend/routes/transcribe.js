@@ -86,7 +86,7 @@ router.post('/', upload.single('audio'), async (req, res, next) => {
 
     const data     = await response.json();
     const text     = data.text?.trim() ?? '';
-    const language = data.language ?? null; // e.g. "english", "spanish"
+    const language = data.language ?? null;
 
     console.log(`[/transcribe] Language: ${language} | "${text.slice(0, 80)}${text.length > 80 ? '…' : ''}"`);
     return res.json({ text, language });
