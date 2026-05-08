@@ -17,7 +17,7 @@
  *   { type: 'STATUS',       payload: string, tabId: number }
  */
 
-const CHUNK_DURATION_MS = 15000;
+const CHUNK_DURATION_MS = 8000; // 8s — short enough to feel live, long enough for Whisper
 
 let mediaRecorder = null;
 let currentTabId  = null;

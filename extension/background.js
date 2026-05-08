@@ -17,6 +17,22 @@
 
 const BACKEND_URL = 'http://localhost:3001';
 
+// Rolling transcript buffer — accumulates chunks across multiple Whisper responses.
+// Fact-check and bias analysis run against this buffer on a separate interval,
+// so analysis updates more frequently than the 8s audio chunk cycle.
+const transcriptBuffers = {}; // tabId → string[]
+
+// How many words to keep in the rolling buffer for analysis context.
+// ~150 words ≈ 60–90 seconds of speech — enough context without being too stale.
+const BUFFER_MAX_WORDS = 150;
+
+// How often (ms) to run fact-check + bias analysis against the rolling buffer.
+// Independent of the audio chunk interval — runs every 20s so analysis feels live.
+const ANALYSIS_INTERVAL_MS = 20000;
+
+// Module-level map of tabId → analysis interval ID
+const analysisIntervals = {};
+
 // ─── Extension Icon Click ────────────────────────────────────────────────────
 
 chrome.action.onClicked.addListener((tab) => {
@@ -64,12 +80,13 @@ async function getSessionActive(tabId) {
  */
 async function startSession(tab) {
   await setSessionActive(tab.id);
+
+  // Initialise the rolling transcript buffer for this tab
+  transcriptBuffers[tab.id] = [];
+
   broadcast({ type: 'STATUS', payload: 'listening' });
 
   try {
-    // getMediaStreamId is the MV3-compatible way to get a capture stream ID
-    // from the service worker. The actual MediaStream is created in the
-    // offscreen document using this ID.
     const streamId = await new Promise((resolve, reject) => {
       chrome.tabCapture.getMediaStreamId(
         { targetTabId: tab.id },
@@ -83,15 +100,18 @@ async function startSession(tab) {
       );
     });
 
-    // Ensure the offscreen document exists
     await ensureOffscreenDocument();
 
-    // Tell the offscreen doc to start recording
     chrome.runtime.sendMessage({
       type:     'START_RECORDING',
       streamId: streamId,
       tabId:    tab.id,
     });
+
+    // Start the analysis interval — runs independently of audio chunking
+    analysisIntervals[tab.id] = setInterval(() => {
+      runAnalysis(tab.id);
+    }, ANALYSIS_INTERVAL_MS);
 
     console.log(`[FactLens] Session started for tab ${tab.id}`);
 
@@ -100,6 +120,7 @@ async function startSession(tab) {
     broadcast({ type: 'ERROR', payload: `Could not start capture: ${err.message}` });
     broadcast({ type: 'STATUS', payload: 'idle' });
     await clearSessionActive(tab.id);
+    delete transcriptBuffers[tab.id];
   }
 }
 
@@ -108,12 +129,19 @@ async function startSession(tab) {
  * @param {number} tabId
  */
 async function stopSession(tabId) {
+  // Stop the analysis interval
+  if (analysisIntervals[tabId]) {
+    clearInterval(analysisIntervals[tabId]);
+    delete analysisIntervals[tabId];
+  }
+
+  // Clear the rolling buffer
+  delete transcriptBuffers[tabId];
+
   // Tell the offscreen doc to stop recording
   chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }).catch(() => {});
 
-  // Close the offscreen document
   await closeOffscreenDocument();
-
   await clearSessionActive(tabId);
   broadcast({ type: 'STATUS', payload: 'idle' });
   console.log(`[FactLens] Session stopped for tab ${tabId}`);
@@ -259,28 +287,58 @@ async function handleAudioChunk(base64, mimeType, tabId) {
 // ─── Transcript Handling ─────────────────────────────────────────────────────
 
 /**
- * Called when a real transcript arrives from the offscreen document.
- * Sends it to the sidebar and fires stub fact-check / bias responses.
+ * Called when a transcript chunk arrives from Whisper.
+ * Appends to the rolling buffer and broadcasts to the sidebar immediately.
+ * Analysis (fact-check + bias) runs on a separate interval against the buffer.
  * @param {number} tabId
  * @param {string} text
  */
 async function handleTranscript(tabId, text) {
+  // Show transcript in the sidebar immediately — no waiting for analysis
   broadcast({ type: 'TRANSCRIPT', payload: text });
+  broadcast({ type: 'STATUS', payload: 'listening' });
+
+  // Append to the rolling buffer
+  if (!transcriptBuffers[tabId]) transcriptBuffers[tabId] = [];
+
+  // Split into words and append
+  const newWords = text.trim().split(/\s+/);
+  transcriptBuffers[tabId].push(...newWords);
+
+  // Trim buffer to max words (drop oldest words from the front)
+  if (transcriptBuffers[tabId].length > BUFFER_MAX_WORDS) {
+    transcriptBuffers[tabId] = transcriptBuffers[tabId].slice(-BUFFER_MAX_WORDS);
+  }
+
+  console.log(`[FactLens] Buffer: ${transcriptBuffers[tabId].length} words`);
+}
+
+/**
+ * Run fact-check and bias analysis against the current rolling buffer.
+ * Called on the ANALYSIS_INTERVAL_MS timer — independent of audio chunking.
+ * @param {number} tabId
+ */
+async function runAnalysis(tabId) {
+  const buffer = transcriptBuffers[tabId];
+  if (!buffer || buffer.length < 10) return; // not enough text yet
+
+  const bufferText = buffer.join(' ');
+  console.log(`[FactLens] Running analysis on ${buffer.length} words...`);
 
   const [factCheckResult, biasResult] = await Promise.allSettled([
-    fetchFactCheck(text),
-    fetchBiasAnalysis(text),
+    fetchFactCheck(bufferText),
+    fetchBiasAnalysis(bufferText),
   ]);
 
-  if (factCheckResult.status === 'fulfilled') {
+  if (factCheckResult.status === 'fulfilled' && factCheckResult.value.length > 0) {
     broadcast({ type: 'FACTCHECK', payload: factCheckResult.value });
-  } else {
+  } else if (factCheckResult.status === 'rejected') {
     broadcast({ type: 'ERROR', payload: 'Fact-check failed: ' + factCheckResult.reason.message });
   }
 
   if (biasResult.status === 'fulfilled') {
     broadcast({ type: 'BIAS', payload: biasResult.value });
-  } else {
+  } else if (biasResult.status === 'rejected') {
     broadcast({ type: 'ERROR', payload: 'Bias analysis failed: ' + biasResult.reason.message });
   }
 }
@@ -322,4 +380,6 @@ function broadcast(message) {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const isActive = await getSessionActive(tabId);
   if (isActive) await stopSession(tabId);
+  // Clean up buffer even if session wasn't formally active
+  delete transcriptBuffers[tabId];
 });
