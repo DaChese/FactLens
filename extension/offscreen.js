@@ -20,6 +20,7 @@
 const CHUNK_DURATION_MS = 8000; // 8s — short enough to feel live, long enough for Whisper
 
 let mediaRecorder = null;
+let audioContext  = null;
 let currentTabId  = null;
 let chunks        = [];
 
@@ -64,6 +65,13 @@ async function startRecording(streamId, tabId) {
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus'
       : 'audio/webm';
+
+    // ── Audio passthrough ──
+    // Connect the captured stream to the audio output so the user can still
+    // hear the tab. Without this the captured stream is consumed silently.
+    audioContext   = new AudioContext();
+    const source   = audioContext.createMediaStreamSource(stream);
+    source.connect(audioContext.destination);
 
     mediaRecorder = new MediaRecorder(stream, { mimeType });
     chunks = [];
@@ -121,6 +129,11 @@ async function startRecording(streamId, tabId) {
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
+  }
+  // Close the AudioContext to release the audio output connection
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
   }
   mediaRecorder = null;
   currentTabId  = null;
