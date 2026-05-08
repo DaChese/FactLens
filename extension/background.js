@@ -33,6 +33,9 @@ const ANALYSIS_INTERVAL_MS = 20000;
 // Last transcript per tab — used to deduplicate overlapping Whisper results
 const lastTranscripts = {}; // tabId → last transcript string
 
+// Detected language per tab — passed to fact-check and bias routes
+const detectedLanguages = {}; // tabId → e.g. "english" | "spanish"
+
 // Module-level map of tabId → analysis interval ID
 const analysisIntervals = {};
 
