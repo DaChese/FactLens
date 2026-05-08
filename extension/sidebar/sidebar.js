@@ -181,6 +181,13 @@
 
     card.appendChild(header);
     card.appendChild(confBar);
+    // Show reasoning if available
+    if (item.reasoning) {
+      const reasoning = document.createElement('p');
+      reasoning.className = 'fl-claim-reasoning';
+      reasoning.textContent = item.reasoning;
+      card.appendChild(reasoning);
+    }
     if (sources.length > 0) card.appendChild(sourcesEl);
 
     return card;
