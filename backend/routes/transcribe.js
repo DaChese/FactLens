@@ -14,7 +14,7 @@ import multer from 'multer';
 
 const router = Router();
 
-// Store uploaded audio in memory — chunks are small (15s ≈ 100–300 KB)
+// Store uploaded audio in memory — chunks are small (8s ≈ 80–150 KB)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB — Whisper's max

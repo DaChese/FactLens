@@ -54,11 +54,9 @@
       case 'ERROR':
         showError(payload);
         break;
-      // These are internal messages between background.js and offscreen.js
-      // The sidebar receives them too (broadcast is extension-wide) but has
-      // nothing to do with them — silently ignore.
       case 'START_RECORDING':
       case 'STOP_RECORDING':
+      case 'AUDIO_CHUNK': // large base64 payload — not for the sidebar
         break;
       default:
         console.warn('[FactLens Sidebar] Unknown message type:', type);
@@ -114,6 +112,10 @@
    * Newest results are prepended so they appear at the top.
    * @param {Array<{claim: string, verdict: string, confidence: number, sources: string[]}>} results
    */
+  // Track rendered claims to avoid duplicates across analysis cycles
+  const renderedClaims = new Set();
+  const MAX_CARDS = 20;
+
   function renderFactChecks(results) {
     if (!Array.isArray(results) || results.length === 0) return;
 
@@ -121,7 +123,18 @@
     if (placeholder) placeholder.remove();
 
     results.forEach((item) => {
+      // Deduplicate by claim text (normalised)
+      const key = item.claim.trim().toLowerCase();
+      if (renderedClaims.has(key)) return;
+      renderedClaims.add(key);
+
       factcheckList.prepend(buildClaimCard(item));
+
+      // Cap total cards to avoid the list growing forever
+      const cards = factcheckList.querySelectorAll('.fl-claim-card');
+      if (cards.length > MAX_CARDS) {
+        cards[cards.length - 1].remove();
+      }
     });
   }
 
