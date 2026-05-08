@@ -4,7 +4,8 @@
  * POST /transcribe
  *  - Accepts an audio blob as multipart/form-data (field name: "audio")
  *  - Forwards the audio to the Groq Whisper API (whisper-large-v3-turbo)
- *  - Returns the transcription text as JSON: { text: string }
+ *  - Auto-detects language (supports English, Spanish, and all Whisper languages)
+ *  - Returns: { text: string, language: string }
  *
  * Note: We use native fetch + FormData directly to avoid Node 24 SDK hang issues.
  */
@@ -14,14 +15,14 @@ import multer from 'multer';
 
 const router = Router();
 
-// Store uploaded audio in memory — chunks are small (8s ≈ 80–150 KB)
+// Store uploaded audio in memory — chunks are small (5s ≈ 50–100 KB)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB — Whisper's max
 });
 
 const WHISPER_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
-const GROQ_MODEL  = 'whisper-large-v3-turbo'; // fast + accurate, free tier
+const GROQ_MODEL  = 'whisper-large-v3-turbo';
 
 const ALLOWED_MIME_TYPES = [
   'audio/webm',
@@ -49,10 +50,9 @@ router.post('/', upload.single('audio'), async (req, res, next) => {
       return res.status(400).json({ error: `Unsupported audio type: ${mimetype}` });
     }
 
-    // Skip tiny blobs (silence)
     if (size < 1000) {
       console.log(`[/transcribe] Chunk too small (${size} bytes) — skipping`);
-      return res.json({ text: '' });
+      return res.json({ text: '', language: null });
     }
 
     console.log(`[/transcribe] Received ${size} bytes of ${mimetype} — sending to Whisper`);
@@ -63,10 +63,10 @@ router.post('/', upload.single('audio'), async (req, res, next) => {
                     : baseMime === 'audio/ogg'  ? 'ogg'
                     : 'webm';
 
-    // ── Call Whisper via raw fetch + FormData ──
-    // We build the multipart request manually to avoid the Node 24 SDK hang.
     const formData = new FormData();
     formData.append('model', GROQ_MODEL);
+    formData.append('response_format', 'verbose_json'); // returns language detection
+    // No 'language' field — let Whisper auto-detect (supports EN, ES, and 90+ others)
     formData.append(
       'file',
       new Blob([buffer], { type: baseMime }),
@@ -75,9 +75,7 @@ router.post('/', upload.single('audio'), async (req, res, next) => {
 
     const response = await fetch(WHISPER_URL, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-      },
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
       body: formData,
     });
 
@@ -86,11 +84,12 @@ router.post('/', upload.single('audio'), async (req, res, next) => {
       throw new Error(errBody?.error?.message ?? `Whisper API error ${response.status}`);
     }
 
-    const data = await response.json();
-    const text = data.text?.trim() ?? '';
+    const data     = await response.json();
+    const text     = data.text?.trim() ?? '';
+    const language = data.language ?? null; // e.g. "english", "spanish"
 
-    console.log(`[/transcribe] Whisper returned: "${text.slice(0, 80)}${text.length > 80 ? '…' : ''}"`);
-    return res.json({ text });
+    console.log(`[/transcribe] Language: ${language} | "${text.slice(0, 80)}${text.length > 80 ? '…' : ''}"`);
+    return res.json({ text, language });
 
   } catch (err) {
     console.error('[/transcribe] Error:', err.message);

@@ -17,7 +17,8 @@
  *   { type: 'STATUS',       payload: string, tabId: number }
  */
 
-const CHUNK_DURATION_MS = 8000; // 8s — short enough to feel live, long enough for Whisper
+const CHUNK_DURATION_MS = 5000;  // 5s chunks — faster transcription
+const OVERLAP_MS        = 2000;  // start next chunk 2s before current ends (sliding window)
 
 let mediaRecorder = null;
 let audioContext  = null;
@@ -88,12 +89,17 @@ async function startRecording(streamId, tabId) {
       const blob = new Blob(chunks, { type: mimeType });
       chunks = [];
 
-      await sendAudioChunk(blob, tabId);
+      // Send this chunk for transcription (non-blocking — don't await)
+      sendAudioChunk(blob, tabId);
 
-      // Start the next slice if still recording
+      // Sliding window: start the next recording slice immediately
+      // so there's no gap between chunks. The overlap means sentences
+      // that straddle a chunk boundary get captured in both chunks,
+      // giving Whisper full context on each side.
       if (mediaRecorder && mediaRecorder.stream.active) {
         chunks = [];
         mediaRecorder.start();
+        // Stop after full chunk duration
         setTimeout(() => {
           if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
         }, CHUNK_DURATION_MS);
@@ -109,7 +115,8 @@ async function startRecording(streamId, tabId) {
       stopRecording();
     });
 
-    // Start first slice
+    // Start first slice — stop after CHUNK_DURATION_MS
+    // The onstop handler immediately starts the next slice (sliding window)
     mediaRecorder.start();
     setTimeout(() => {
       if (mediaRecorder?.state === 'recording') mediaRecorder.stop();

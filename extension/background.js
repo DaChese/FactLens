@@ -30,10 +30,11 @@ const BUFFER_MAX_WORDS = 150;
 // Independent of the audio chunk interval — runs every 20s so analysis feels live.
 const ANALYSIS_INTERVAL_MS = 20000;
 
+// Store detected language per tab so the analysis interval can use it
+const detectedLanguages = {}; // tabId → language string e.g. "english" | "spanish"
+
 // Module-level map of tabId → analysis interval ID
 const analysisIntervals = {};
-
-// ─── Extension Icon Click ────────────────────────────────────────────────────
 
 chrome.action.onClicked.addListener((tab) => {
   if (!tab.id) return;
@@ -135,8 +136,9 @@ async function stopSession(tabId) {
     delete analysisIntervals[tabId];
   }
 
-  // Clear the rolling buffer
+  // Clear the rolling buffer and language
   delete transcriptBuffers[tabId];
+  delete detectedLanguages[tabId];
 
   // Tell the offscreen doc to stop recording
   chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }).catch(() => {});
@@ -266,7 +268,7 @@ async function handleAudioChunk(base64, mimeType, tabId) {
       throw new Error(err.error || `HTTP ${res.status}`);
     }
 
-    const { text } = await res.json();
+    const { text, language } = await res.json();
 
     if (!text || text.trim().length === 0) {
       console.log('[FactLens] Empty transcript (silence)');
@@ -274,8 +276,8 @@ async function handleAudioChunk(base64, mimeType, tabId) {
       return;
     }
 
-    console.log(`[FactLens] Transcript: "${text.slice(0, 80)}"`);
-    await handleTranscript(tabId, text.trim());
+    console.log(`[FactLens] Transcript (${language ?? 'unknown'}): "${text.slice(0, 80)}"`);
+    await handleTranscript(tabId, text.trim(), language);
 
   } catch (err) {
     console.error('[FactLens] Audio chunk error:', err.message);
@@ -289,28 +291,26 @@ async function handleAudioChunk(base64, mimeType, tabId) {
 /**
  * Called when a transcript chunk arrives from Whisper.
  * Appends to the rolling buffer and broadcasts to the sidebar immediately.
- * Analysis (fact-check + bias) runs on a separate interval against the buffer.
  * @param {number} tabId
  * @param {string} text
+ * @param {string|null} language - detected language e.g. "english", "spanish"
  */
-async function handleTranscript(tabId, text) {
-  // Show transcript in the sidebar immediately — no waiting for analysis
+async function handleTranscript(tabId, text, language = null) {
   broadcast({ type: 'TRANSCRIPT', payload: text });
   broadcast({ type: 'STATUS', payload: 'listening' });
 
-  // Append to the rolling buffer
-  if (!transcriptBuffers[tabId]) transcriptBuffers[tabId] = [];
+  // Store the detected language for the analysis interval
+  if (language) detectedLanguages[tabId] = language;
 
-  // Split into words and append
+  if (!transcriptBuffers[tabId]) transcriptBuffers[tabId] = [];
   const newWords = text.trim().split(/\s+/);
   transcriptBuffers[tabId].push(...newWords);
 
-  // Trim buffer to max words (drop oldest words from the front)
   if (transcriptBuffers[tabId].length > BUFFER_MAX_WORDS) {
     transcriptBuffers[tabId] = transcriptBuffers[tabId].slice(-BUFFER_MAX_WORDS);
   }
 
-  console.log(`[FactLens] Buffer: ${transcriptBuffers[tabId].length} words`);
+  console.log(`[FactLens] Buffer: ${transcriptBuffers[tabId].length} words (${language ?? 'unknown'})`);
 }
 
 /**
@@ -320,14 +320,15 @@ async function handleTranscript(tabId, text) {
  */
 async function runAnalysis(tabId) {
   const buffer = transcriptBuffers[tabId];
-  if (!buffer || buffer.length < 10) return; // not enough text yet
+  if (!buffer || buffer.length < 10) return;
 
   const bufferText = buffer.join(' ');
-  console.log(`[FactLens] Running analysis on ${buffer.length} words...`);
+  const language   = detectedLanguages[tabId] ?? 'english';
+  console.log(`[FactLens] Running analysis on ${buffer.length} words (${language})...`);
 
   const [factCheckResult, biasResult] = await Promise.allSettled([
-    fetchFactCheck(bufferText),
-    fetchBiasAnalysis(bufferText),
+    fetchFactCheck(bufferText, language),
+    fetchBiasAnalysis(bufferText, language),
   ]);
 
   if (factCheckResult.status === 'fulfilled' && factCheckResult.value.length > 0) {
@@ -345,21 +346,21 @@ async function runAnalysis(tabId) {
 
 // ─── Backend API Calls ───────────────────────────────────────────────────────
 
-async function fetchFactCheck(text) {
+async function fetchFactCheck(text, language = 'english') {
   const res = await fetch(`${BACKEND_URL}/factcheck`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ transcript: text }),
+    body:    JSON.stringify({ transcript: text, language }),
   });
   if (!res.ok) throw new Error(`/factcheck returned ${res.status}`);
   return res.json();
 }
 
-async function fetchBiasAnalysis(text) {
+async function fetchBiasAnalysis(text, language = 'english') {
   const res = await fetch(`${BACKEND_URL}/bias`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ transcript: text }),
+    body:    JSON.stringify({ transcript: text, language }),
   });
   if (!res.ok) throw new Error(`/bias returned ${res.status}`);
   return res.json();

@@ -56,22 +56,23 @@ Output format:
 
 router.post('/', async (req, res, next) => {
   try {
-    const { transcript } = req.body;
+    const { transcript, language = 'english' } = req.body;
 
     if (!transcript || typeof transcript !== 'string' || transcript.trim().length === 0) {
       return res.status(400).json({ error: 'Request body must include a non-empty "transcript" string.' });
     }
 
     const safeTranscript = transcript.slice(0, MAX_CHARS);
+    const replyLanguage  = language === 'spanish' ? 'Spanish' : 'English';
 
-    console.log(`[/bias] Analysing ${safeTranscript.length} chars...`);
+    console.log(`[/bias] Analysing ${safeTranscript.length} chars (${replyLanguage})...`);
 
     const response = await groq.chat.completions.create({
       model:      MODEL,
       max_tokens: 128,
       messages: [
         { role: 'system', content: BIAS_SYSTEM_PROMPT },
-        { role: 'user',   content: `Transcript:\n${safeTranscript}` },
+        { role: 'user',   content: `Transcript (language: ${replyLanguage}):\n${safeTranscript}\n\nRespond in ${replyLanguage}.` },
       ],
     });
 

@@ -141,22 +141,23 @@ Output format:
 
 router.post('/', async (req, res, next) => {
   try {
-    const { transcript } = req.body;
+    const { transcript, language = 'english' } = req.body;
 
     if (!transcript || typeof transcript !== 'string' || transcript.trim().length === 0) {
       return res.status(400).json({ error: 'Request body must include a non-empty "transcript" string.' });
     }
 
     const safeTranscript = transcript.slice(0, MAX_CHARS);
+    const replyLanguage  = language === 'spanish' ? 'Spanish' : 'English';
 
     // ── Step 1: Extract verifiable claims ──
     const extractionRes = await groq.chat.completions.create({
       model:       MODEL,
       max_tokens:  256,
-      temperature: 0.1, // low temperature = more deterministic, less hallucination
+      temperature: 0.1,
       messages: [
         { role: 'system', content: EXTRACT_SYSTEM_PROMPT },
-        { role: 'user',   content: `Transcript:\n${safeTranscript}` },
+        { role: 'user',   content: `Transcript (language: ${replyLanguage}):\n${safeTranscript}` },
       ],
     });
 
@@ -227,7 +228,7 @@ router.post('/', async (req, res, next) => {
             { role: 'system', content: VERDICT_SYSTEM_PROMPT },
             {
               role:    'user',
-              content: `Claim: "${claim}"\n\n${tavilyAnswer}Search results:\n${searchContext}`,
+              content: `Claim: "${claim}"\nRespond in ${replyLanguage}.\n\n${tavilyAnswer}Search results:\n${searchContext}`,
             },
           ],
         });
