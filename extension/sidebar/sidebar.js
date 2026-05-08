@@ -54,6 +54,12 @@
       case 'ERROR':
         showError(payload);
         break;
+      // These are internal messages between background.js and offscreen.js
+      // The sidebar receives them too (broadcast is extension-wide) but has
+      // nothing to do with them — silently ignore.
+      case 'START_RECORDING':
+      case 'STOP_RECORDING':
+        break;
       default:
         console.warn('[FactLens Sidebar] Unknown message type:', type);
     }
@@ -217,6 +223,15 @@
   }
 
   // ─── Init ─────────────────────────────────────────────────────────────────
+
+  // When the panel first loads, ask the background script for the current
+  // session status. This handles the race condition where the STATUS message
+  // was broadcast before the panel's onMessage listener was registered.
+  chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((response) => {
+    if (response?.type === 'STATUS') updateStatus(response.payload);
+  }).catch(() => {
+    // Background may not be ready yet — safe to ignore
+  });
 
   console.log('[FactLens] Side panel loaded and ready.');
 })();

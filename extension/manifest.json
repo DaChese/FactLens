@@ -9,7 +9,8 @@
     "activeTab",
     "scripting",
     "storage",
-    "sidePanel"
+    "sidePanel",
+    "offscreen"
   ],
 
   "host_permissions": [
@@ -31,6 +32,13 @@
   "side_panel": {
     "default_path": "sidebar/sidebar.html"
   },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["offscreen.html"],
+      "matches":   ["<all_urls>"]
+    }
+  ],
 
   "action": {
     "default_title": "FactLens",

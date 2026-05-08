@@ -1,37 +1,30 @@
 /**
  * background.js — FactLens Service Worker
  *
- * Responsibilities:
- *  - Listen for the extension icon click to activate FactLens
- *  - Open Chrome's native Side Panel for the active tab
- *  - Capture tab audio via chrome.tabCapture (Sprint 2)
- *  - Chunk audio and POST to the backend /transcribe endpoint (Sprint 2)
- *  - Relay STATUS, TRANSCRIPT, FACTCHECK, and BIAS messages to the side panel
- *    via chrome.runtime.sendMessage
+ * In Chrome MV3, service workers cannot use MediaRecorder or access
+ * MediaStream objects directly. The audio pipeline lives in an offscreen
+ * document (offscreen.html / offscreen.js) instead.
  *
- * Session state is stored in chrome.storage.session so it survives service
- * worker restarts (MV3 service workers are ephemeral and can be killed by
- * Chrome at any time — never rely on module-level variables for persistence).
+ * This service worker:
+ *  1. Opens the Chrome Side Panel on icon click
+ *  2. Gets a stream ID via chrome.tabCapture.getMediaStreamId()
+ *  3. Creates an offscreen document and passes the stream ID to it
+ *  4. Receives TRANSCRIPT / STATUS / ERROR messages from the offscreen doc
+ *  5. Broadcasts those messages to the side panel
+ *
+ * Session state lives in chrome.storage.session (survives SW restarts).
  */
 
 const BACKEND_URL = 'http://localhost:3001';
-
-// How often (ms) to send an audio chunk to the transcription endpoint.
-// Sprint 2 note: real Whisper transcription works best with 10–30s chunks.
-const CHUNK_INTERVAL_MS = 5000;
 
 // ─── Extension Icon Click ────────────────────────────────────────────────────
 
 chrome.action.onClicked.addListener((tab) => {
   if (!tab.id) return;
 
-  // sidePanel.open() MUST be called synchronously inside the click handler
-  // (before any await) — Chrome requires it to be triggered by a direct user
-  // gesture. We open it unconditionally on every click, then check session
-  // state asynchronously to decide whether to start or stop.
+  // Must be called synchronously — Chrome requires a direct user gesture
   chrome.sidePanel.open({ tabId: tab.id });
 
-  // Handle start/stop asynchronously after the panel is open
   (async () => {
     const isActive = await getSessionActive(tab.id);
     if (isActive) {
@@ -42,37 +35,20 @@ chrome.action.onClicked.addListener((tab) => {
   })();
 });
 
-// ─── Session State (chrome.storage.session) ──────────────────────────────────
-//
-// We use chrome.storage.session instead of a plain object so that session
-// state survives service worker restarts. storage.session is cleared when
-// the browser session ends (tab/window close), which is the right lifetime.
+// ─── Session State ───────────────────────────────────────────────────────────
 
-/**
- * Mark a tab as having an active FactLens session.
- * @param {number} tabId
- */
 async function setSessionActive(tabId) {
   const { activeSessions = {} } = await chrome.storage.session.get('activeSessions');
   activeSessions[tabId] = true;
   await chrome.storage.session.set({ activeSessions });
 }
 
-/**
- * Remove a tab's active session marker.
- * @param {number} tabId
- */
 async function clearSessionActive(tabId) {
   const { activeSessions = {} } = await chrome.storage.session.get('activeSessions');
   delete activeSessions[tabId];
   await chrome.storage.session.set({ activeSessions });
 }
 
-/**
- * Check whether a tab currently has an active session.
- * @param {number} tabId
- * @returns {Promise<boolean>}
- */
 async function getSessionActive(tabId) {
   const { activeSessions = {} } = await chrome.storage.session.get('activeSessions');
   return !!activeSessions[tabId];
@@ -81,125 +57,217 @@ async function getSessionActive(tabId) {
 // ─── Session Management ──────────────────────────────────────────────────────
 
 /**
- * Start an audio capture session for the given tab.
- * @param {chrome.tabs.Tab} tab
+ * Start a capture session:
+ *  1. Get a stream ID from tabCapture (works in SW via getMediaStreamId)
+ *  2. Create the offscreen document
+ *  3. Tell the offscreen doc to start recording with that stream ID
  */
 async function startSession(tab) {
   await setSessionActive(tab.id);
-
-  // Notify the side panel that we are now listening
   broadcast({ type: 'STATUS', payload: 'listening' });
 
-  // TODO (Sprint 2): Replace stub interval with real tabCapture + audio pipeline.
-  //
-  // chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
-  //   if (!stream) {
-  //     console.error('[FactLens] tabCapture failed:', chrome.runtime.lastError);
-  //     broadcast({ type: 'ERROR', payload: 'Audio capture failed. Is the tab playing audio?' });
-  //     return;
-  //   }
-  //   buildAudioPipeline(tab.id, stream);
-  // });
+  try {
+    // getMediaStreamId is the MV3-compatible way to get a capture stream ID
+    // from the service worker. The actual MediaStream is created in the
+    // offscreen document using this ID.
+    const streamId = await new Promise((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId(
+        { targetTabId: tab.id },
+        (id) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(id);
+          }
+        }
+      );
+    });
 
-  // ── STUB: fire a fake transcript every CHUNK_INTERVAL_MS ──
-  // We can't store the intervalId in storage (not serialisable), so we keep
-  // it in a module-level map. This is acceptable for the stub — Sprint 2 will
-  // replace this with a real MediaStream pipeline that doesn't need an interval.
-  console.log(`[FactLens] Starting stub session for tab ${tab.id}`);
+    // Ensure the offscreen document exists
+    await ensureOffscreenDocument();
 
-  const intervalId = setInterval(async () => {
-    // Guard: if the session was stopped while the interval was pending, bail out
-    const stillActive = await getSessionActive(tab.id);
-    if (!stillActive) {
-      clearInterval(intervalId);
-      return;
-    }
-    handleTranscript(tab.id, '[Stub] This is a simulated transcript chunk.');
-  }, CHUNK_INTERVAL_MS);
+    // Tell the offscreen doc to start recording
+    chrome.runtime.sendMessage({
+      type:     'START_RECORDING',
+      streamId: streamId,
+      tabId:    tab.id,
+    });
 
-  // Store intervalId in a module-level map for cleanup.
-  // This is intentionally limited to the stub — real audio pipelines use
-  // MediaStream track lifecycle instead.
-  stubIntervals[tab.id] = intervalId;
+    console.log(`[FactLens] Session started for tab ${tab.id}`);
+
+  } catch (err) {
+    console.error('[FactLens] startSession error:', err.message);
+    broadcast({ type: 'ERROR', payload: `Could not start capture: ${err.message}` });
+    broadcast({ type: 'STATUS', payload: 'idle' });
+    await clearSessionActive(tab.id);
+  }
 }
 
-// Module-level map used only by the stub interval — not relied on for
-// persistent state (see comment in startSession above).
-const stubIntervals = {};
-
 /**
- * Stop the capture session for the given tab.
+ * Stop the current session and tear down the offscreen document.
  * @param {number} tabId
  */
 async function stopSession(tabId) {
-  // Clear stub interval if running
-  if (stubIntervals[tabId]) {
-    clearInterval(stubIntervals[tabId]);
-    delete stubIntervals[tabId];
-  }
+  // Tell the offscreen doc to stop recording
+  chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }).catch(() => {});
 
-  // TODO (Sprint 2): Stop MediaStream tracks and disconnect AudioContext nodes
-  // session.stream?.getTracks().forEach(t => t.stop());
+  // Close the offscreen document
+  await closeOffscreenDocument();
 
   await clearSessionActive(tabId);
   broadcast({ type: 'STATUS', payload: 'idle' });
   console.log(`[FactLens] Session stopped for tab ${tabId}`);
 }
 
-// ─── Audio Pipeline (Sprint 2) ───────────────────────────────────────────────
+// ─── Offscreen Document Management ──────────────────────────────────────────
+
+const OFFSCREEN_URL = chrome.runtime.getURL('offscreen.html');
 
 /**
- * TODO (Sprint 2): Build the Web Audio API pipeline.
- *  1. Create an AudioContext
- *  2. Connect the MediaStream source to an AudioWorkletNode (preferred over
- *     the deprecated ScriptProcessorNode)
- *  3. Accumulate PCM samples in the worklet
- *  4. Every CHUNK_INTERVAL_MS, encode as WebM via MediaRecorder and call
- *     sendAudioChunk()
- *
- * @param {number} tabId
- * @param {MediaStream} stream
+ * Create the offscreen document if it doesn't already exist.
  */
-function buildAudioPipeline(tabId, stream) {
-  // Placeholder — implement in Sprint 2
-}
+async function ensureOffscreenDocument() {
+  // Check if it's already open
+  const existing = await chrome.offscreen.hasDocument?.();
+  if (existing) return;
 
-/**
- * TODO (Sprint 2): Encode a PCM buffer as a WebM Blob and POST to /transcribe.
- * @param {number} tabId
- * @param {Blob} audioBlob
- */
-async function sendAudioChunk(tabId, audioBlob) {
-  broadcast({ type: 'STATUS', payload: 'processing' });
+  // getContexts is the preferred way to check in newer Chrome versions
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT'],
+    documentUrls: [OFFSCREEN_URL],
+  }).catch(() => []);
 
-  const formData = new FormData();
-  formData.append('audio', audioBlob, 'chunk.webm');
+  if (contexts.length > 0) return;
 
-  const res = await fetch(`${BACKEND_URL}/transcribe`, {
-    method: 'POST',
-    body: formData,
+  await chrome.offscreen.createDocument({
+    url:      'offscreen.html',
+    reasons:  ['USER_MEDIA'],
+    justification: 'Capture and chunk tab audio for transcription',
   });
 
-  if (!res.ok) throw new Error(`/transcribe returned ${res.status}`);
-
-  const { text } = await res.json();
-  if (text) handleTranscript(tabId, text);
+  console.log('[FactLens] Offscreen document created');
 }
 
-// ─── Transcription Handling ──────────────────────────────────────────────────
+/**
+ * Close the offscreen document if it exists.
+ */
+async function closeOffscreenDocument() {
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT'],
+    documentUrls: [OFFSCREEN_URL],
+  }).catch(() => []);
+
+  if (contexts.length === 0) return;
+
+  await chrome.offscreen.closeDocument().catch(() => {});
+  console.log('[FactLens] Offscreen document closed');
+}
+
+// ─── Message Handling ────────────────────────────────────────────────────────
 
 /**
- * Called when a transcript chunk is ready (real or stub).
- * Forwards the text to the side panel and kicks off fact-check + bias analysis.
+ * Listen for messages from:
+ *  - offscreen.js (TRANSCRIPT, STATUS, ERROR)
+ *  - sidebar.js   (GET_STATUS)
+ */
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  switch (message.type) {
+
+    // Audio chunk from offscreen doc — fetch to backend and transcribe
+    case 'AUDIO_CHUNK':
+      handleAudioChunk(message.payload, message.mimeType, message.tabId);
+      break;
+
+    // Messages from the offscreen document — relay to the side panel
+    case 'TRANSCRIPT':
+      handleTranscript(message.tabId, message.payload);
+      break;
+
+    case 'STATUS':
+      broadcast({ type: 'STATUS', payload: message.payload });
+      break;
+
+    case 'ERROR':
+      broadcast({ type: 'ERROR', payload: message.payload });
+      break;
+
+    // Request from the side panel on load — reply with current session state
+    case 'GET_STATUS':
+      chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {
+        const hasActive = Object.keys(activeSessions).length > 0;
+        sendResponse({ type: 'STATUS', payload: hasActive ? 'listening' : 'idle' });
+      });
+      return true; // keep channel open for async response
+  }
+});
+
+// ─── Audio Chunk → Backend ───────────────────────────────────────────────────
+
+/**
+ * Receive a base64-encoded audio chunk from the offscreen document,
+ * POST it to the backend /transcribe endpoint, and handle the result.
+ * Fetching from the service worker avoids the network restrictions that
+ * affect offscreen documents.
+ *
+ * @param {string} base64  - base64-encoded audio data
+ * @param {string} mimeType
+ * @param {number} tabId
+ */
+async function handleAudioChunk(base64, mimeType, tabId) {
+  try {
+    // Decode base64 back to binary
+    const binary = atob(base64);
+    const bytes  = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+    const baseMime  = mimeType.split(';')[0].trim();
+    const extension = baseMime === 'audio/mpeg' ? 'mp3'
+                    : baseMime === 'audio/wav'  ? 'wav'
+                    : 'webm';
+
+    const formData = new FormData();
+    formData.append('audio', new Blob([bytes], { type: baseMime }), `chunk.${extension}`);
+
+    const res = await fetch(`${BACKEND_URL}/transcribe`, {
+      method: 'POST',
+      body:   formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+
+    const { text } = await res.json();
+
+    if (!text || text.trim().length === 0) {
+      console.log('[FactLens] Empty transcript (silence)');
+      broadcast({ type: 'STATUS', payload: 'listening' });
+      return;
+    }
+
+    console.log(`[FactLens] Transcript: "${text.slice(0, 80)}"`);
+    await handleTranscript(tabId, text.trim());
+
+  } catch (err) {
+    console.error('[FactLens] Audio chunk error:', err.message);
+    broadcast({ type: 'ERROR',  payload: `Transcription failed: ${err.message}` });
+    broadcast({ type: 'STATUS', payload: 'listening' });
+  }
+}
+
+// ─── Transcript Handling ─────────────────────────────────────────────────────
+
+/**
+ * Called when a real transcript arrives from the offscreen document.
+ * Sends it to the sidebar and fires stub fact-check / bias responses.
  * @param {number} tabId
  * @param {string} text
  */
 async function handleTranscript(tabId, text) {
-  // Send raw transcript to the side panel immediately
   broadcast({ type: 'TRANSCRIPT', payload: text });
 
-  // Fire fact-check and bias analysis in parallel
-  // TODO (Sprint 2): Uncomment once backend routes are wired up with real APIs
+  // TODO (Sprint 3): Replace stubs with real Claude + Tavily calls
   // const [factCheckResult, biasResult] = await Promise.allSettled([
   //   fetchFactCheck(text),
   //   fetchBiasAnalysis(text),
@@ -215,76 +283,53 @@ async function handleTranscript(tabId, text) {
   //   broadcast({ type: 'ERROR', payload: 'Bias analysis failed: ' + biasResult.reason.message });
   // }
 
-  // ── STUB responses ──
+  // ── STUB responses (Sprint 3 will replace these) ──
   broadcast({
     type: 'FACTCHECK',
-    payload: [
-      {
-        claim: '[Stub] Example claim from transcript.',
-        verdict: 'Unverified',
-        confidence: 0.5,
-        sources: [],
-      },
-    ],
+    payload: [{
+      claim:      text.slice(0, 80) + (text.length > 80 ? '…' : ''),
+      verdict:    'Unverified',
+      confidence: 0.0,
+      sources:    [],
+    }],
   });
 
   broadcast({
     type: 'BIAS',
     payload: {
-      lean_score: 0.0,
-      emotion_score: 0.1,
-      framing_label: 'Neutral (stub)',
+      lean_score:    0.0,
+      emotion_score: 0.0,
+      framing_label: 'Analysis coming in Sprint 3',
     },
   });
 }
 
-// ─── Backend API Calls (Sprint 2) ────────────────────────────────────────────
+// ─── Backend API Calls (Sprint 3) ────────────────────────────────────────────
 
-/**
- * TODO (Sprint 2): POST transcript text to /factcheck and return parsed JSON.
- * @param {string} text
- * @returns {Promise<Array>}
- */
 async function fetchFactCheck(text) {
   const res = await fetch(`${BACKEND_URL}/factcheck`, {
-    method: 'POST',
+    method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transcript: text }),
+    body:    JSON.stringify({ transcript: text }),
   });
   if (!res.ok) throw new Error(`/factcheck returned ${res.status}`);
   return res.json();
 }
 
-/**
- * TODO (Sprint 2): POST transcript text to /bias and return parsed JSON.
- * @param {string} text
- * @returns {Promise<object>}
- */
 async function fetchBiasAnalysis(text) {
   const res = await fetch(`${BACKEND_URL}/bias`, {
-    method: 'POST',
+    method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transcript: text }),
+    body:    JSON.stringify({ transcript: text }),
   });
   if (!res.ok) throw new Error(`/bias returned ${res.status}`);
   return res.json();
 }
 
-// ─── Messaging ───────────────────────────────────────────────────────────────
+// ─── Broadcast ───────────────────────────────────────────────────────────────
 
-/**
- * Broadcast a message to all extension pages (side panel, any open popups).
- * The side panel's sidebar.js listens with chrome.runtime.onMessage.
- *
- * We use sendMessage rather than targeting a specific tab because the side
- * panel is an extension page, not a content script — it lives on the
- * extension's own origin and receives runtime messages directly.
- *
- * @param {object} message
- */
 function broadcast(message) {
   chrome.runtime.sendMessage(message).catch((err) => {
-    // The side panel may not be open yet — this is expected and safe to ignore
     if (!err.message.includes('Could not establish connection')) {
       console.warn('[FactLens] broadcast error:', err.message);
     }
@@ -293,7 +338,6 @@ function broadcast(message) {
 
 // ─── Cleanup ─────────────────────────────────────────────────────────────────
 
-// Stop sessions when a tab is closed
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const isActive = await getSessionActive(tabId);
   if (isActive) await stopSession(tabId);

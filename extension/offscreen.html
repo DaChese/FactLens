@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<!--
+  offscreen.html — FactLens Offscreen Document
+
+  Chrome MV3 service workers cannot use MediaRecorder or tabCapture streams
+  directly. This offscreen document runs in a hidden background context that
+  has access to both — it receives a stream ID from background.js, captures
+  the audio, chunks it, and POSTs each chunk to the backend /transcribe endpoint.
+-->
+<html>
+  <head><meta charset="UTF-8" /></head>
+  <body>
+    <script src="offscreen.js"></script>
+  </body>
+</html>
