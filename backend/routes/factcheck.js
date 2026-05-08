@@ -34,9 +34,53 @@ const groq = new OpenAI({
 
 const tavilyClient = tavily({ apiKey: process.env.TAVILY_API_KEY });
 
-const MODEL     = 'llama-3.3-70b-versatile';
-const MAX_CHARS = 4000;
-const MAX_CLAIMS = 3; // fewer claims = more thorough search per claim
+const MODEL      = 'llama-3.3-70b-versatile';
+const MAX_CHARS  = 4000;
+const MAX_CLAIMS = 3;
+
+// ─── Claim Cache ─────────────────────────────────────────────────────────────
+// In-memory cache keyed by normalised claim text.
+// Prevents re-running Tavily + Groq for claims already verified in this session.
+// TTL of 1 hour — claims don't change that fast.
+
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const claimCache   = new Map(); // normalised claim → { result, cachedAt }
+
+/**
+ * Normalise a claim string for cache key comparison.
+ * Lowercases, trims, and collapses whitespace so minor phrasing differences
+ * don't cause cache misses.
+ * @param {string} claim
+ * @returns {string}
+ */
+function normaliseClaim(claim) {
+  return claim.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * Get a cached result for a claim, or null if not cached / expired.
+ * @param {string} claim
+ * @returns {object|null}
+ */
+function getCached(claim) {
+  const key    = normaliseClaim(claim);
+  const cached = claimCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > CACHE_TTL_MS) {
+    claimCache.delete(key);
+    return null;
+  }
+  return cached.result;
+}
+
+/**
+ * Store a result in the cache.
+ * @param {string} claim
+ * @param {object} result
+ */
+function setCached(claim, result) {
+  claimCache.set(normaliseClaim(claim), { result, cachedAt: Date.now() });
+}
 
 // ─── System Prompts ──────────────────────────────────────────────────────────
 
@@ -144,18 +188,25 @@ router.post('/', async (req, res, next) => {
     console.log(`[/factcheck] Extracted ${claims.length} claims:`, claims);
 
     // ── Step 2 + 3: Search + verdict for each claim ──
-    // Run sequentially to avoid rate limiting on Tavily free tier
+    // Run sequentially to avoid rate limiting on Tavily free tier.
+    // Cache hits return instantly without any API calls.
     const results = [];
     for (const claim of claims) {
+      // Check cache first
+      const cached = getCached(claim);
+      if (cached) {
+        console.log(`[/factcheck] Cache hit: "${claim.slice(0, 50)}"`);
+        results.push(cached);
+        continue;
+      }
+
       try {
-        // Advanced search gives more content per result — better for fact-checking
         const searchResult = await tavilyClient.search(claim, {
-          maxResults:   5,
-          searchDepth:  'advanced',
-          includeAnswer: true, // Tavily's own AI answer as additional context
+          maxResults:    5,
+          searchDepth:   'advanced',
+          includeAnswer: true,
         });
 
-        // Build rich context for the verdict model
         const tavilyAnswer = searchResult.answer
           ? `Tavily summary: ${searchResult.answer}\n\n`
           : '';
@@ -166,10 +217,8 @@ router.post('/', async (req, res, next) => {
           )
           .join('\n\n');
 
-        // Always use Tavily URLs — never trust model-generated URLs
         const sourceUrls = searchResult.results.map(r => r.url);
 
-        // Get verdict from Groq — grounded in search results only
         const verdictRes = await groq.chat.completions.create({
           model:       MODEL,
           max_tokens:  200,
@@ -198,13 +247,17 @@ router.post('/', async (req, res, next) => {
 
         console.log(`[/factcheck] "${claim.slice(0, 50)}" → ${verdict} (${(confidence * 100).toFixed(0)}%)`);
 
-        results.push({
+        const result = {
           claim,
           verdict,
           confidence,
           reasoning: String(parsed.reasoning || '').slice(0, 300),
           sources:   sourceUrls,
-        });
+        };
+
+        // Cache the result so repeat claims are instant
+        setCached(claim, result);
+        results.push(result);
 
       } catch (err) {
         console.warn(`[/factcheck] Failed on claim "${claim.slice(0, 50)}":`, err.message);
