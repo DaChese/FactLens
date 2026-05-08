@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FactLens</title>
+  <link rel="stylesheet" href="sidebar.css" />
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header class="fl-header">
+    <div class="fl-logo">
+      <span class="fl-logo-icon">🔍</span>
+      <span class="fl-logo-text">FactLens</span>
+    </div>
+    <div class="fl-status" id="fl-status">
+      <span class="fl-status-dot" id="fl-status-dot"></span>
+      <span class="fl-status-label" id="fl-status-label">Idle</span>
+    </div>
+  </header>
+
+  <!-- ── Transcript Panel ───────────────────────────────────────────────── -->
+  <section class="fl-section">
+    <h2 class="fl-section-title">Live Transcript</h2>
+    <div class="fl-transcript-feed" id="fl-transcript-feed">
+      <p class="fl-placeholder">Transcript will appear here once listening starts…</p>
+    </div>
+  </section>
+
+  <!-- ── Fact-Check Panel ───────────────────────────────────────────────── -->
+  <section class="fl-section">
+    <h2 class="fl-section-title">Fact Checks</h2>
+    <div class="fl-factcheck-list" id="fl-factcheck-list">
+      <p class="fl-placeholder">Claims will be verified as they are detected…</p>
+    </div>
+  </section>
+
+  <!-- ── Bias Meter ─────────────────────────────────────────────────────── -->
+  <section class="fl-section">
+    <h2 class="fl-section-title">Bias Meter</h2>
+
+    <div class="fl-bias-labels">
+      <span>Left</span>
+      <span>Center</span>
+      <span>Right</span>
+    </div>
+
+    <div class="fl-bias-track" aria-label="Bias meter">
+      <div class="fl-bias-bar" id="fl-bias-bar"></div>
+      <!-- Needle sits at the center (0) by default -->
+      <div class="fl-bias-needle" id="fl-bias-needle"></div>
+    </div>
+
+    <p class="fl-bias-framing" id="fl-bias-framing">—</p>
+
+    <div class="fl-emotion-row">
+      <span class="fl-emotion-label">Emotional charge</span>
+      <div class="fl-emotion-track">
+        <div class="fl-emotion-fill" id="fl-emotion-fill"></div>
+      </div>
+      <span class="fl-emotion-value" id="fl-emotion-value">0%</span>
+    </div>
+  </section>
+
+  <script src="sidebar.js"></script>
+</body>
+</html>

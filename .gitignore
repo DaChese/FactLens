@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Environment — never commit real keys
+backend/.env
+
+# Build artifacts
+dist/
+build/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

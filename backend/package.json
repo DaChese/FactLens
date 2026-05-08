@@ -1,0 +1,20 @@
+{
+  "name": "factlens-backend",
+  "version": "1.0.0",
+  "description": "FactLens secure API proxy backend",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.39.0",
+    "@tavily/core": "0.5.2",
+    "cors": "2.8.5",
+    "dotenv": "16.4.7",
+    "express": "^4.22.1",
+    "multer": "^2.0.1",
+    "openai": "4.96.2"
+  }
+}
