@@ -1,144 +1,136 @@
-# FactLens
+# FactLens 🔍
 
-A Chrome extension (Manifest V3) that captures audio from any active browser tab, transcribes it in real time, and runs an AI agent to fact-check claims and detect bias. Results appear in a live side panel alongside the page.
+Ever watched a news segment or podcast and wondered "is that actually true?" FactLens is a Chrome extension that listens to whatever's playing in your browser, transcribes it live, and automatically fact-checks what's being said — all in a side panel right next to the page.
 
-## Tech Stack
+## What it does
 
-| Layer | Technology |
-|-------|-----------|
-| Extension | Chrome MV3, Service Worker, Offscreen Document, Web Audio API |
-| Transcription | Groq Whisper (`whisper-large-v3-turbo`) — auto language detection |
-| Fact-checking | Groq LLM (`llama-3.3-70b-versatile`) + Tavily Search |
-| Bias Analysis | Groq LLM (`llama-3.3-70b-versatile`) |
-| Sidebar UI | Vanilla JS + CSS (dark mode, no frameworks) |
+- **Live transcription** — captures audio from any tab and turns it into text in real time
+- **Fact-checking** — pulls out specific claims, searches the web, and tells you if they're True, False, or Unverified — with sources
+- **Bias detection** — analyzes the language and framing, not just the topic, and shows you where it lands on the political spectrum
+- **Works in English and Spanish** — auto-detects the language, no setup needed
+
+## Built with
+
+| | |
+|--|--|
+| Chrome Extension | MV3, Service Worker, Offscreen Document |
+| Transcription | Groq Whisper (`whisper-large-v3-turbo`) |
+| Fact-checking & Bias | Groq LLM (`llama-3.3-70b-versatile`) |
+| Web Search | Tavily Search API |
+| Sidebar | Vanilla JS + CSS (dark mode) |
 | Backend | Node.js + Express |
 
-## Project Structure
+## Getting it running
 
-```
-factlens/
-├── extension/
-│   ├── manifest.json        # MV3 config — permissions, service worker, side panel
-│   ├── background.js        # Service worker — session, rolling buffer, overlap dedup, backend fetch
-│   ├── content.js           # Content script — placeholder for future in-page features
-│   ├── offscreen.html       # Offscreen document shell
-│   ├── offscreen.js         # Audio capture, passthrough, ring buffer chunking
-│   ├── sidebar/
-│   │   ├── sidebar.html     # Side panel UI shell
-│   │   ├── sidebar.js       # Renders transcript, fact-check cards, bias meter
-│   │   └── sidebar.css      # Dark mode styles
-│   └── icons/
-├── backend/
-│   ├── server.js            # Express server — CORS, middleware, route mounting
-│   ├── routes/
-│   │   ├── transcribe.js    # POST /transcribe → Groq Whisper (auto language detection)
-│   │   ├── factcheck.js     # POST /factcheck → Groq LLM + Tavily (with 1-hour claim cache)
-│   │   └── bias.js          # POST /bias → Groq LLM
-│   ├── package.json
-│   └── .env.example
-├── docs/
-│   └── architecture.md      # System diagram, data flow, message types, pipeline detail
-├── .gitignore
-└── README.md
-```
+You need two things running: the backend server and the Chrome extension.
 
-## Getting Started
-
-### 1. Backend
+### 1. Start the backend
 
 ```bash
 cd factlens/backend
 cp .env.example .env
-# Fill in your API keys in .env
+# Add your API keys to .env (see below)
 npm install
 npm run dev
 ```
 
-The server starts on `http://localhost:3001`. Verify with:
-
+Check it's alive:
 ```bash
 curl http://localhost:3001/health
-# → {"status":"ok","timestamp":"..."}
+# {"status":"ok","timestamp":"..."}
 ```
 
-> The backend must be running before the extension will work.
+### 2. Load the extension
 
-### 2. Chrome Extension
+1. Go to `chrome://extensions` in Chrome
+2. Turn on **Developer mode** (top right)
+3. Click **Load unpacked** → select the `factlens/extension/` folder
+4. The FactLens icon shows up in your toolbar
 
-1. Open Chrome and navigate to `chrome://extensions`
-2. Enable **Developer mode** (top-right toggle)
-3. Click **Load unpacked** and select the `factlens/extension/` folder
-4. The FactLens icon will appear in your toolbar
-5. Navigate to any tab with audio playing (YouTube, podcast, news stream, etc.)
-6. Click the FactLens icon — the side panel opens and transcription begins immediately
-7. Click the icon again to stop
+### 3. Use it
 
-## Environment Variables
+1. Open any tab with audio — YouTube, a podcast, a news stream
+2. Click the FactLens icon
+3. The side panel opens and starts listening
+4. Transcript shows up within a few seconds, fact-checks roll in after about 20 seconds
+5. Click the icon again to stop
 
-Copy `backend/.env.example` to `backend/.env` and fill in:
+## API Keys
 
-| Variable | Used for | Get it at |
-|----------|----------|-----------|
-| `PORT` | Backend port (default: 3001) | — |
-| `GROQ_API_KEY` | Whisper transcription + LLM fact-checking + bias | [console.groq.com](https://console.groq.com) (free) |
-| `TAVILY_API_KEY` | Web search for claim verification | [app.tavily.com](https://app.tavily.com) (free tier) |
+You only need two keys, both free:
 
-**Never commit `.env` to version control.**
+| Key | Where to get it |
+|-----|----------------|
+| `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) — free account |
+| `TAVILY_API_KEY` | [app.tavily.com](https://app.tavily.com) — free tier |
 
-## API Endpoints
+Put them in `backend/.env` like this:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Server health check |
-| `POST` | `/transcribe` | Audio blob → `{ text, language }` (Groq Whisper) |
-| `POST` | `/factcheck` | Transcript → fact-check verdicts with sources and reasoning |
-| `POST` | `/bias` | Transcript → `{ lean_score, emotion_score, framing_label }` |
+```
+GROQ_API_KEY=gsk_...
+TAVILY_API_KEY=tvly-...
+```
 
-## How It Works
+Don't commit `.env` to git — your keys stay local.
 
-1. User clicks the FactLens toolbar icon → Chrome side panel opens
-2. `background.js` calls `chrome.tabCapture.getMediaStreamId()` to get a stream ID
-3. An offscreen document is created; the stream ID is passed to `offscreen.js`
-4. `offscreen.js` captures the tab audio via `getUserMedia` using the stream ID
-5. Audio is routed through an `AudioContext` for passthrough — the user can still hear the tab
-6. `MediaRecorder` fires every 500ms; chunks accumulate in a 12-slot ring buffer (6 seconds total)
-7. Every 6 new chunks (~3 seconds), the full ring buffer is base64-encoded and sent to `background.js`
-8. `background.js` POSTs the audio blob to `/transcribe` — Groq Whisper returns `{ text, language }`
-9. Overlap deduplication strips repeated words from the previous chunk boundary
-10. New transcript text appears in the side panel immediately and is added to a rolling 150-word buffer
-11. Every 20 seconds, the buffer is sent to `/factcheck` and `/bias` in parallel
-12. Fact-check results (verdict, confidence, reasoning, source links) render as verdict cards
-13. Bias results update the political lean needle and emotional charge bar
-14. Verified claims are cached server-side for 1 hour — repeat claims return instantly
+## How it actually works under the hood
 
-See `docs/architecture.md` for the full system diagram and pipeline detail.
+Chrome's MV3 extensions can't directly access audio streams in a service worker, so there's a bit of a relay happening:
 
-## Fact-Check Pipeline
+1. You click the icon → the side panel opens
+2. The service worker gets a stream ID from Chrome's tab capture API
+3. That ID gets passed to a hidden "offscreen document" which does the actual audio capture
+4. The audio is also routed back to your speakers so you can still hear everything
+5. Every 3 seconds, a 6-second overlapping audio clip gets sent to the backend
+6. Groq Whisper transcribes it and detects the language
+7. The transcript shows up in the panel immediately
+8. Every 20 seconds, the last ~150 words get analyzed for claims and bias
+9. For each claim: Tavily searches the web, then the LLM reads the results and gives a verdict
+10. Claims are cached for an hour so the same claim doesn't get re-searched every cycle
 
-Each 20-second analysis cycle:
-1. Groq extracts up to 3 specific, verifiable factual claims from the rolling buffer
-2. Each claim is checked against a server-side cache (1-hour TTL) — cache hits skip steps 3–4
-3. Tavily runs an advanced web search (5 results) for each new claim
-4. Groq assesses the claim against the search results and returns a grounded verdict
-5. Results render as verdict cards with colored left borders (green=True, red=False, orange=Unverified), confidence bars, reasoning, and source domain links
+The 6-second overlapping window is what prevents words from getting dropped at chunk boundaries — each clip shares 3 seconds with the previous one, so nothing falls through the cracks.
 
-## Language Support
+## What the fact-check cards show
 
-FactLens auto-detects the spoken language via Whisper's built-in language detection. Fact-check reasoning and bias framing labels are returned in the detected language. Currently optimized for **English** and **Spanish**, with basic support for all 90+ Whisper-supported languages.
+Each card has:
+- The claim that was extracted from the transcript
+- A verdict badge — **True** (green), **False** (red), or **Unverified** (orange)
+- A confidence bar showing how sure the model is
+- A one-sentence reasoning explaining the verdict
+- Source links showing which sites the verdict is based on
 
-## Sprint Status
+## Project files
 
-- [x] **Sprint 1** — Project scaffold, extension shell, sidebar UI, backend stubs
-- [x] **Sprint 2** — Real audio capture (offscreen doc), audio passthrough, Groq Whisper transcription
-- [x] **Sprint 3** — Groq LLM fact-checking + Tavily, bias analysis, rolling buffer, claim cache, Spanish support, ring buffer overlap, overlap deduplication
-- [ ] **Sprint 4** — UI polish, packaging
-- [ ] **Sprint 5** — Error handling, performance tuning, final packaging
+```
+factlens/
+├── extension/
+│   ├── manifest.json        # Chrome extension config
+│   ├── background.js        # Service worker — the brain of the operation
+│   ├── content.js           # Content script (placeholder for future features)
+│   ├── offscreen.html/js    # Hidden doc that handles audio capture
+│   └── sidebar/             # The side panel UI
+├── backend/
+│   ├── server.js            # Express server
+│   └── routes/
+│       ├── transcribe.js    # Sends audio to Groq Whisper
+│       ├── factcheck.js     # Extracts claims, searches Tavily, gets verdicts
+│       └── bias.js          # Analyzes language tone and framing
+└── docs/
+    └── architecture.md      # Full technical diagram if you want to go deep
+```
 
-## Known Limitations
+## Sprint progress
 
-- The backend must be running locally (`npm run dev`) — there is no hosted backend yet
-- First transcript appears after ~6 seconds (first full ring buffer)
-- First fact-check and bias results appear after ~20 seconds (first analysis cycle)
-- Fact-check accuracy depends on Tavily search quality — obscure or very recent claims may return Unverified
-- Bias analysis reflects language tone and framing only, not the factual content of what is said
-- Claim cache is in-memory and resets when the backend restarts
+- [x] Sprint 1 — Got the extension loading and the sidebar rendering
+- [x] Sprint 2 — Real audio capture, passthrough, Whisper transcription
+- [x] Sprint 3 — Fact-checking, bias analysis, claim cache, Spanish support, overlap fix
+- [ ] Sprint 4 — UI polish, packaging
+- [ ] Sprint 5 — Final cleanup and packaging
+
+## Things to know
+
+- The backend has to be running locally for the extension to work — there's no hosted version yet
+- First transcript shows up after about 6 seconds
+- First fact-check results show up after about 20 seconds
+- The claim cache resets when you restart the backend
+- Bias analysis looks at *how* something is said, not *what* is being said
