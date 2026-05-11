@@ -46,9 +46,14 @@ let mediaRecorder = null;
 let audioContext  = null;
 let currentTabId  = null;
 
-// Ring buffer of raw Blob chunks from MediaRecorder
+// The first chunk from MediaRecorder contains the WebM initialization segment
+// (codec info, container headers). We must prepend it to every blob we send
+// to Groq, otherwise the file is invalid and Whisper rejects it.
+let headerChunk = null;
+
+// Ring buffer of raw Blob chunks from MediaRecorder (audio data only, no header)
 let ringBuffer  = [];
-let chunksSince = 0; // how many new chunks since last send
+let chunksSince = 0;
 
 // ─── Message Handler ─────────────────────────────────────────────────────────
 
@@ -74,6 +79,7 @@ async function startRecording(streamId, tabId) {
   currentTabId = tabId;
   ringBuffer   = [];
   chunksSince  = 0;
+  headerChunk  = null;
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -103,7 +109,14 @@ async function startRecording(streamId, tabId) {
     mediaRecorder.ondataavailable = (event) => {
       if (!event.data || event.data.size === 0) return;
 
-      // Add to ring buffer, drop oldest chunk if full
+      // The very first chunk is the WebM initialization segment — save it
+      // separately and always prepend it to every blob we send.
+      if (!headerChunk) {
+        headerChunk = event.data;
+        return; // don't add the header to the ring buffer
+      }
+
+      // Add audio data to ring buffer, drop oldest if full
       ringBuffer.push(event.data);
       if (ringBuffer.length > RING_SIZE) {
         ringBuffer.shift();
@@ -111,10 +124,11 @@ async function startRecording(streamId, tabId) {
 
       chunksSince++;
 
-      // Every SEND_EVERY new chunks, assemble and send the full ring buffer
+      // Every SEND_EVERY new chunks, assemble header + ring buffer into a blob
       if (chunksSince >= SEND_EVERY && ringBuffer.length >= RING_SIZE) {
         chunksSince = 0;
-        const blob = new Blob(ringBuffer, { type: mimeType });
+        // Always prepend the header chunk so Groq can parse the WebM container
+        const blob = new Blob([headerChunk, ...ringBuffer], { type: mimeType });
         sendAudioChunk(blob, tabId);
       }
     };
@@ -159,6 +173,7 @@ function stopRecording() {
   currentTabId  = null;
   ringBuffer    = [];
   chunksSince   = 0;
+  headerChunk   = null;
   console.log('[FactLens Offscreen] Recording stopped');
 }
 
