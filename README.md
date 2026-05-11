@@ -88,7 +88,7 @@ Chrome's MV3 extensions can't directly access audio streams in a service worker,
 9. For each claim: Tavily searches the web, then the LLM reads the results and gives a verdict
 10. Claims are cached for an hour so the same claim doesn't get re-searched every cycle
 
-The 6-second overlapping window is what prevents words from getting dropped at chunk boundaries — each clip shares 3 seconds with the previous one, so nothing falls through the cracks.
+The 6-second overlapping window is what prevents words from getting dropped at chunk boundaries — each clip shares 3 seconds with the previous one, so nothing falls through, hopefully
 
 ## What the fact-check cards show
 
@@ -129,7 +129,7 @@ factlens/
 
 ## Things to know
 
-- The backend has to be running locally for the extension to work — there's no hosted version yet
+- The backend has to be running locally for the extension to work — there's no hosted version yet!!
 - First transcript shows up after about 6 seconds
 - First fact-check results show up after about 20 seconds
 - The claim cache resets when you restart the backend
