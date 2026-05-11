@@ -18,13 +18,13 @@ Ever watched a news segment or podcast and wondered "is that actually true?" Fac
 | Fact-checking & Bias | Groq LLM (`llama-3.3-70b-versatile`) |
 | Web Search | Tavily Search API |
 | Sidebar | Vanilla JS + CSS (dark mode) |
-| Backend | Node.js + Express |
+| Backend | Node.js + Express (deployable to Railway) |
 
 ## Getting it running
 
-You need two things running: the backend server and the Chrome extension.
+You need the backend running somewhere and the Chrome extension loaded. Pick one:
 
-### 1. Start the backend
+### Option A — Local development
 
 ```bash
 cd factlens/backend
@@ -40,20 +40,30 @@ curl http://localhost:3001/health
 # {"status":"ok","timestamp":"..."}
 ```
 
-### 2. Load the extension
+### Option B — Deploy to Railway (no local server needed)
+
+1. Go to [railway.app](https://railway.app) and sign in with GitHub
+2. Click **New Project → Deploy from GitHub repo** → select your FactLens fork
+3. Set the **Root Directory** to `backend`
+4. Add environment variables in the Railway dashboard: `GROQ_API_KEY` and `TAVILY_API_KEY`
+5. Railway gives you a public URL like `https://factlens-xxxx.up.railway.app`
+6. Open `extension/background.js` and update `BACKEND_URL` to your Railway URL
+7. Reload the extension in `chrome://extensions`
+
+### Load the extension
 
 1. Go to `chrome://extensions` in Chrome
 2. Turn on **Developer mode** (top right)
 3. Click **Load unpacked** → select the `factlens/extension/` folder
 4. The FactLens icon shows up in your toolbar
 
-### 3. Use it
+### Use it
 
 1. Open any tab with audio — YouTube, a podcast, a news stream
 2. Click the FactLens icon
 3. The side panel opens and starts listening
 4. Transcript shows up within a few seconds, fact-checks roll in after about 20 seconds
-5. Click the icon again to stop
+5. Click the **stop button** in the panel header (or the toolbar icon again) to stop
 
 ## API Keys
 
@@ -64,12 +74,7 @@ You only need two keys, both free:
 | `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) — free account |
 | `TAVILY_API_KEY` | [app.tavily.com](https://app.tavily.com) — free tier |
 
-Put them in `backend/.env` like this:
-
-```
-GROQ_API_KEY=gsk_...
-TAVILY_API_KEY=tvly-...
-```
+For local dev, put them in `backend/.env`. For Railway, add them as environment variables in the dashboard.
 
 Don't commit `.env` to git — your keys stay local.
 
@@ -88,12 +93,12 @@ Chrome's MV3 extensions can't directly access audio streams in a service worker,
 9. For each claim: Tavily searches the web, then the LLM reads the results and gives a verdict
 10. Claims are cached for an hour so the same claim doesn't get re-searched every cycle
 
-The 6-second overlapping window is what prevents words from getting dropped at chunk boundaries — each clip shares 3 seconds with the previous one, so nothing falls through, hopefully
+The 6-second overlapping window is what prevents words from getting dropped at chunk boundaries — each clip shares 3 seconds with the previous one, so nothing falls through the cracks.
 
 ## What the fact-check cards show
 
 Each card has:
-- The claim that was extracted from the transcript
+- The claim extracted from the transcript
 - A verdict badge — **True** (green), **False** (red), or **Unverified** (orange)
 - A confidence bar showing how sure the model is
 - A one-sentence reasoning explaining the verdict
@@ -111,6 +116,7 @@ factlens/
 │   └── sidebar/             # The side panel UI
 ├── backend/
 │   ├── server.js            # Express server
+│   ├── railway.toml         # Railway deployment config
 │   └── routes/
 │       ├── transcribe.js    # Sends audio to Groq Whisper
 │       ├── factcheck.js     # Extracts claims, searches Tavily, gets verdicts
@@ -124,13 +130,12 @@ factlens/
 - [x] Sprint 1 — Got the extension loading and the sidebar rendering
 - [x] Sprint 2 — Real audio capture, passthrough, Whisper transcription
 - [x] Sprint 3 — Fact-checking, bias analysis, claim cache, Spanish support, overlap fix
-- [ ] Sprint 4 — UI polish, packaging
-- [ ] Sprint 5 — Final cleanup and packaging
+- [x] Sprint 4 — Stop button, timestamps, clear buttons, spinner, UI polish, v1.1.0
+- [x] Sprint 5 — Railway deployment config, production-ready backend
 
 ## Things to know
 
-- The backend has to be running locally for the extension to work — there's no hosted version yet!!
-- First transcript shows up after about 6 seconds
-- First fact-check results show up after about 20 seconds
-- The claim cache resets when you restart the backend
+- After deploying to Railway, update `BACKEND_URL` in `extension/background.js` with your Railway URL
+- The claim cache resets when the backend restarts
 - Bias analysis looks at *how* something is said, not *what* is being said
+- First transcript shows up after about 6 seconds, first fact-checks after about 20 seconds

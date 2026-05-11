@@ -35,8 +35,13 @@ const PORT = process.env.PORT || 3001;
 // and localhost during development.
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (e.g., curl, Postman) and extension origins
-    if (!origin || origin.startsWith('chrome-extension://') || origin === `http://localhost:${PORT}`) {
+    // Allow: no origin (curl/Postman), Chrome extensions, localhost
+    if (
+      !origin ||
+      origin.startsWith('chrome-extension://') ||
+      origin === `http://localhost:${PORT}` ||
+      origin === `https://localhost:${PORT}`
+    ) {
       callback(null, true);
     } else {
       callback(new Error(`CORS: origin ${origin} not allowed`));

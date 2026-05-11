@@ -15,6 +15,9 @@
  * Session state lives in chrome.storage.session (survives SW restarts).
  */
 
+// Backend URL — swap this to your Railway deployment URL for production.
+// Local dev:  'http://localhost:3001'
+// Production: 'https://your-app.up.railway.app'
 const BACKEND_URL = 'http://localhost:3001';
 
 // Rolling transcript buffer — accumulates chunks across multiple Whisper responses.
