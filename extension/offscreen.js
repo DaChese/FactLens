@@ -151,6 +151,10 @@ function stopRecording() {
     audioContext.close();
     audioContext = null;
   }
+  // Stop all audio tracks to fully release the tab capture
+  if (mediaRecorder?.stream) {
+    mediaRecorder.stream.getTracks().forEach(track => track.stop());
+  }
   mediaRecorder = null;
   currentTabId  = null;
   ringBuffer    = [];

@@ -30,6 +30,9 @@ const BUFFER_MAX_WORDS = 150;
 // Independent of the audio chunk interval — runs every 20s so analysis feels live.
 const ANALYSIS_INTERVAL_MS = 20000;
 
+// Guard flag — prevents overlapping analysis cycles if Tavily/Groq is slow
+const analysisRunning = {}; // tabId → boolean
+
 // Last transcript per tab — used to deduplicate overlapping Whisper results
 const lastTranscripts = {}; // tabId → last transcript string
 
@@ -143,6 +146,7 @@ async function stopSession(tabId) {
   delete transcriptBuffers[tabId];
   delete detectedLanguages[tabId];
   delete lastTranscripts[tabId];
+  delete analysisRunning[tabId];
 
   // Tell the offscreen doc to stop recording
   chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }).catch(() => {});
@@ -373,35 +377,62 @@ async function handleTranscript(tabId, text, language = null) {
  * @param {number} tabId
  */
 async function runAnalysis(tabId) {
+  // Skip if a previous analysis cycle is still running — prevents rate limit pile-up
+  if (analysisRunning[tabId]) {
+    console.log('[FactLens] Analysis still running, skipping cycle');
+    return;
+  }
+
   const buffer = transcriptBuffers[tabId];
   if (!buffer || buffer.length < 10) return;
 
+  analysisRunning[tabId] = true;
   const bufferText = buffer.join(' ');
   const language   = detectedLanguages[tabId] ?? 'english';
   console.log(`[FactLens] Running analysis on ${buffer.length} words (${language})...`);
 
-  const [factCheckResult, biasResult] = await Promise.allSettled([
-    fetchFactCheck(bufferText, language),
-    fetchBiasAnalysis(bufferText, language),
-  ]);
+  try {
+    const [factCheckResult, biasResult] = await Promise.allSettled([
+      fetchFactCheck(bufferText, language),
+      fetchBiasAnalysis(bufferText, language),
+    ]);
 
-  if (factCheckResult.status === 'fulfilled' && factCheckResult.value.length > 0) {
-    broadcast({ type: 'FACTCHECK', payload: factCheckResult.value });
-  } else if (factCheckResult.status === 'rejected') {
-    broadcast({ type: 'ERROR', payload: 'Fact-check failed: ' + factCheckResult.reason.message });
-  }
+    if (factCheckResult.status === 'fulfilled' && factCheckResult.value.length > 0) {
+      broadcast({ type: 'FACTCHECK', payload: factCheckResult.value });
+    } else if (factCheckResult.status === 'rejected') {
+      broadcast({ type: 'ERROR', payload: 'Fact-check failed: ' + factCheckResult.reason.message });
+    }
 
-  if (biasResult.status === 'fulfilled') {
-    broadcast({ type: 'BIAS', payload: biasResult.value });
-  } else if (biasResult.status === 'rejected') {
-    broadcast({ type: 'ERROR', payload: 'Bias analysis failed: ' + biasResult.reason.message });
+    if (biasResult.status === 'fulfilled') {
+      broadcast({ type: 'BIAS', payload: biasResult.value });
+    } else if (biasResult.status === 'rejected') {
+      broadcast({ type: 'ERROR', payload: 'Bias analysis failed: ' + biasResult.reason.message });
+    }
+  } finally {
+    analysisRunning[tabId] = false;
   }
 }
 
 // ─── Backend API Calls ───────────────────────────────────────────────────────
 
+// Request timeout for backend calls — prevents hanging if backend is slow
+const REQUEST_TIMEOUT_MS = 30000;
+
+/**
+ * Fetch with a timeout. Throws if the request takes longer than timeoutMs.
+ */
+async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchFactCheck(text, language = 'english') {
-  const res = await fetch(`${BACKEND_URL}/factcheck`, {
+  const res = await fetchWithTimeout(`${BACKEND_URL}/factcheck`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ transcript: text, language }),
@@ -411,7 +442,7 @@ async function fetchFactCheck(text, language = 'english') {
 }
 
 async function fetchBiasAnalysis(text, language = 'english') {
-  const res = await fetch(`${BACKEND_URL}/bias`, {
+  const res = await fetchWithTimeout(`${BACKEND_URL}/bias`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ transcript: text, language }),

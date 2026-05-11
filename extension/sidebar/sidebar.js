@@ -216,13 +216,16 @@
    *   framing_label: plain-English description
    */
   function updateBiasMeter({ lean_score = 0, emotion_score = 0, framing_label = '—' }) {
-    // Convert lean_score (-1 to +1) → CSS left percentage (0% to 100%)
-    const leftPct = ((lean_score + 1) / 2) * 100;
+    // Clamp inputs to valid ranges before calculating positions
+    const lean    = Math.max(-1, Math.min(1, Number(lean_score)    || 0));
+    const emotion = Math.max(0,  Math.min(1, Number(emotion_score) || 0));
+
+    const leftPct = ((lean + 1) / 2) * 100;
     biasNeedle.style.left = `${leftPct.toFixed(1)}%`;
 
     biasFraming.textContent = framing_label || '—';
 
-    const emotionPct = Math.round(Math.min(Math.max(emotion_score, 0), 1) * 100);
+    const emotionPct = Math.round(emotion * 100);
     emotionFill.style.width = `${emotionPct}%`;
     emotionValue.textContent = `${emotionPct}%`;
   }

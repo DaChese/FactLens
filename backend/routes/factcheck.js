@@ -220,6 +220,13 @@ router.post('/', async (req, res, next) => {
 
         const sourceUrls = searchResult.results.map(r => r.url);
 
+        // If Tavily returned no results, mark as Unverified immediately
+        if (sourceUrls.length === 0) {
+          console.warn(`[/factcheck] No search results for: "${claim.slice(0, 50)}"`);
+          results.push({ claim, verdict: 'Unverified', confidence: 0.0, reasoning: 'No search results found.', sources: [] });
+          continue;
+        }
+
         const verdictRes = await groq.chat.completions.create({
           model:       MODEL,
           max_tokens:  200,

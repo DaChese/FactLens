@@ -16,6 +16,16 @@ import transcribeRouter from './routes/transcribe.js';
 import factcheckRouter  from './routes/factcheck.js';
 import biasRouter       from './routes/bias.js';
 
+// ─── Startup Validation ──────────────────────────────────────────────────────
+
+const REQUIRED_KEYS = ['GROQ_API_KEY', 'TAVILY_API_KEY'];
+const missing = REQUIRED_KEYS.filter(k => !process.env[k]);
+if (missing.length > 0) {
+  console.error(`[FactLens] Missing required environment variables: ${missing.join(', ')}`);
+  console.error('[FactLens] Copy backend/.env.example to backend/.env and fill in your keys.');
+  process.exit(1);
+}
+
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
