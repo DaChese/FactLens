@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   FactLens Sidebar — Dark Mode UI
+   FactLens Sidebar — Dark Mode UI  (Sprint 4)
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* ── Reset & Base ─────────────────────────────────────────────────────────── */
@@ -25,32 +25,28 @@
   --unverified:    #ff9800;
 
   /* Bias meter — standard US political colors */
-  --bias-left:     #2196f3;   /* blue  — left leaning */
-  --bias-right:    #f44336;   /* red   — right leaning */
+  --bias-left:     #2196f3;
+  --bias-right:    #f44336;
   --bias-center:   #37474f;
 
   --radius:        8px;
   --font:          'Segoe UI', system-ui, sans-serif;
 }
 
-html, body {
-  width: 100%;
+html {
   height: 100%;
-  overflow: hidden;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: var(--font);
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  overflow: hidden;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 /* ── Header ───────────────────────────────────────────────────────────────── */
@@ -70,15 +66,19 @@ body {
   gap: 8px;
 }
 
-.fl-logo-icon {
-  font-size: 18px;
-}
+.fl-logo-icon { font-size: 18px; }
 
 .fl-logo-text {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.5px;
   color: var(--text-primary);
+}
+
+.fl-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* Status indicator */
@@ -119,10 +119,51 @@ body {
   color: var(--text-secondary);
 }
 
+/* Stop button */
+.fl-stop-btn {
+  background: rgba(244, 67, 54, 0.15);
+  border: 1px solid rgba(244, 67, 54, 0.4);
+  color: #ef9a9a;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  line-height: 1;
+}
+
+.fl-stop-btn:hover {
+  background: rgba(244, 67, 54, 0.3);
+  border-color: rgba(244, 67, 54, 0.7);
+}
+
 /* ── Sections ─────────────────────────────────────────────────────────────── */
 .fl-section {
-  padding: 14px 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* Transcript and fact-check sections grow to fill available space */
+.fl-section--transcript {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.fl-section--factcheck {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0; /* allows flex child to shrink below content size */
+  overflow: hidden;
+}
+
+.fl-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
 }
 
 .fl-section-title {
@@ -131,7 +172,23 @@ body {
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--text-secondary);
-  margin-bottom: 10px;
+}
+
+/* Clear button */
+.fl-clear-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.fl-clear-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-hover);
 }
 
 .fl-placeholder {
@@ -142,7 +199,7 @@ body {
 
 /* ── Transcript Feed ──────────────────────────────────────────────────────── */
 .fl-transcript-feed {
-  max-height: 160px;
+  height: 150px;
   overflow-y: auto;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -153,7 +210,7 @@ body {
 }
 
 .fl-transcript-chunk {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.6;
@@ -163,23 +220,59 @@ body {
   margin-bottom: 0;
 }
 
+.fl-transcript-time {
+  display: block;
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+  letter-spacing: 0.3px;
+}
+
+/* ── Processing spinner ───────────────────────────────────────────────────── */
+.fl-spinner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-style: italic;
+  padding: 4px 0;
+}
+
+.fl-spinner::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Fact-Check Cards ─────────────────────────────────────────────────────── */
 .fl-factcheck-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 220px;
+  flex: 1;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+  min-height: 0;
 }
 
 .fl-claim-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--border); /* overridden per verdict below */
+  border-left: 3px solid var(--border);
   border-radius: var(--radius);
   padding: 10px 12px;
+  flex-shrink: 0;
 }
 
 .fl-claim-card.true       { border-left-color: var(--true); }
@@ -198,6 +291,7 @@ body {
   font-size: 12px;
   color: var(--text-primary);
   flex: 1;
+  line-height: 1.5;
 }
 
 /* Verdict badge */
@@ -256,6 +350,10 @@ body {
   border-radius: 4px;
   border: 1px solid rgba(92, 107, 192, 0.3);
   transition: background 0.2s;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fl-source-link:hover {
@@ -279,7 +377,6 @@ body {
   margin-bottom: 8px;
 }
 
-/* Needle — positioned via JS using left: 0%–100% */
 .fl-bias-needle {
   position: absolute;
   top: -4px;
@@ -287,7 +384,7 @@ body {
   height: 18px;
   background: #fff;
   border-radius: 2px;
-  left: 50%; /* default: center */
+  left: 50%;
   transform: translateX(-50%);
   transition: left 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
   box-shadow: 0 0 4px rgba(0,0,0,0.6);
@@ -343,10 +440,11 @@ body {
   border: 1px solid var(--false);
   border-radius: var(--radius);
   padding: 8px 12px;
-  margin: 8px 16px;
+  margin: 8px 16px 0;
   font-size: 11px;
   color: #ef9a9a;
   display: none;
+  flex-shrink: 0;
 }
 
 .fl-error-banner.visible {

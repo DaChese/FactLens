@@ -229,6 +229,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       broadcast({ type: 'ERROR', payload: message.payload });
       break;
 
+    // Stop session request from the sidebar stop button
+    case 'STOP_SESSION':
+      chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {
+        Object.keys(activeSessions).forEach(tabId => stopSession(Number(tabId)));
+      });
+      break;
+
     // Request from the side panel on load — reply with current session state
     case 'GET_STATUS':
       chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {

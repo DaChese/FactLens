@@ -1,14 +1,5 @@
 /**
- * sidebar.js — FactLens Side Panel UI Controller
- *
- * Responsibilities:
- *  - Listen for messages from background.js via chrome.runtime.onMessage
- *    (the side panel is an extension page, so it shares the runtime message bus)
- *  - Update the status indicator
- *  - Append transcript chunks to the live feed
- *  - Render fact-check verdict cards with source links
- *  - Animate the bias meter needle and emotion bar
- *  - Display error banners when something goes wrong
+ * sidebar.js — FactLens Side Panel UI Controller (Sprint 4)
  */
 
 (function () {
@@ -16,59 +7,59 @@
 
   // ─── DOM References ──────────────────────────────────────────────────────
 
-  const statusDot      = document.getElementById('fl-status-dot');
-  const statusLabel    = document.getElementById('fl-status-label');
-  const transcriptFeed = document.getElementById('fl-transcript-feed');
-  const factcheckList  = document.getElementById('fl-factcheck-list');
-  const biasNeedle     = document.getElementById('fl-bias-needle');
-  const biasFraming    = document.getElementById('fl-bias-framing');
-  const emotionFill    = document.getElementById('fl-emotion-fill');
-  const emotionValue   = document.getElementById('fl-emotion-value');
+  const statusDot        = document.getElementById('fl-status-dot');
+  const statusLabel      = document.getElementById('fl-status-label');
+  const stopBtn          = document.getElementById('fl-stop-btn');
+  const transcriptFeed   = document.getElementById('fl-transcript-feed');
+  const factcheckList    = document.getElementById('fl-factcheck-list');
+  const biasNeedle       = document.getElementById('fl-bias-needle');
+  const biasFraming      = document.getElementById('fl-bias-framing');
+  const emotionFill      = document.getElementById('fl-emotion-fill');
+  const emotionValue     = document.getElementById('fl-emotion-value');
+  const clearTranscript  = document.getElementById('fl-clear-transcript');
+  const clearFactcheck   = document.getElementById('fl-clear-factcheck');
 
   // ─── Message Listener ────────────────────────────────────────────────────
 
-  /**
-   * The side panel is an extension page, so it receives messages directly
-   * from background.js via chrome.runtime.onMessage — no postMessage bridge
-   * needed (that was the iframe approach).
-   *
-   * Expected message shape: { type: string, payload: any }
-   */
   chrome.runtime.onMessage.addListener((message) => {
     const { type, payload } = message || {};
     if (!type) return;
 
     switch (type) {
-      case 'STATUS':
-        updateStatus(payload);
-        break;
-      case 'TRANSCRIPT':
-        appendTranscript(payload);
-        break;
-      case 'FACTCHECK':
-        renderFactChecks(payload);
-        break;
-      case 'BIAS':
-        updateBiasMeter(payload);
-        break;
-      case 'ERROR':
-        showError(payload);
-        break;
+      case 'STATUS':        updateStatus(payload);      break;
+      case 'TRANSCRIPT':    appendTranscript(payload);  break;
+      case 'FACTCHECK':     renderFactChecks(payload);  break;
+      case 'BIAS':          updateBiasMeter(payload);   break;
+      case 'ERROR':         showError(payload);         break;
       case 'START_RECORDING':
       case 'STOP_RECORDING':
-      case 'AUDIO_CHUNK': // large base64 payload — not for the sidebar
+      case 'AUDIO_CHUNK':
         break;
       default:
         console.warn('[FactLens Sidebar] Unknown message type:', type);
     }
   });
 
+  // ─── Stop Button ─────────────────────────────────────────────────────────
+
+  stopBtn.addEventListener('click', () => {
+    // Send a stop request to the background service worker
+    chrome.runtime.sendMessage({ type: 'STOP_SESSION' }).catch(() => {});
+  });
+
+  // ─── Clear Buttons ───────────────────────────────────────────────────────
+
+  clearTranscript.addEventListener('click', () => {
+    transcriptFeed.innerHTML = '<p class="fl-placeholder">Transcript will appear here once listening starts…</p>';
+  });
+
+  clearFactcheck.addEventListener('click', () => {
+    factcheckList.innerHTML = '<p class="fl-placeholder">Claims will be verified as they are detected…</p>';
+    renderedClaims.clear();
+  });
+
   // ─── Status ──────────────────────────────────────────────────────────────
 
-  /**
-   * Update the header status indicator dot and label.
-   * @param {'idle'|'listening'|'processing'} status
-   */
   function updateStatus(status) {
     statusDot.classList.remove('listening', 'processing');
 
@@ -82,37 +73,60 @@
 
     if (status === 'listening' || status === 'processing') {
       statusDot.classList.add(status);
+      stopBtn.hidden = false;
+      // Show spinner in transcript feed if it's still showing the placeholder
+      showSpinnerIfEmpty();
+    } else {
+      stopBtn.hidden = true;
+      removeSpinner();
     }
+  }
+
+  // ─── Spinner ─────────────────────────────────────────────────────────────
+
+  function showSpinnerIfEmpty() {
+    if (transcriptFeed.querySelector('.fl-transcript-chunk')) return;
+    if (transcriptFeed.querySelector('.fl-spinner')) return;
+    const placeholder = transcriptFeed.querySelector('.fl-placeholder');
+    if (placeholder) placeholder.remove();
+    const spinner = document.createElement('div');
+    spinner.className = 'fl-spinner';
+    spinner.id = 'fl-spinner';
+    spinner.textContent = 'Listening for audio…';
+    transcriptFeed.appendChild(spinner);
+  }
+
+  function removeSpinner() {
+    const spinner = document.getElementById('fl-spinner');
+    if (spinner) spinner.remove();
   }
 
   // ─── Transcript ──────────────────────────────────────────────────────────
 
-  /**
-   * Append a new transcript chunk to the scrollable feed.
-   * Removes the placeholder text on the first real chunk.
-   * @param {string} text
-   */
   function appendTranscript(text) {
+    removeSpinner();
     const placeholder = transcriptFeed.querySelector('.fl-placeholder');
     if (placeholder) placeholder.remove();
 
-    const chunk = document.createElement('p');
+    const chunk = document.createElement('div');
     chunk.className = 'fl-transcript-chunk';
-    chunk.textContent = text;
-    transcriptFeed.appendChild(chunk);
 
-    // Auto-scroll to the latest chunk
+    // Timestamp
+    const time = document.createElement('span');
+    time.className = 'fl-transcript-time';
+    time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    const text_node = document.createElement('span');
+    text_node.textContent = text;
+
+    chunk.appendChild(time);
+    chunk.appendChild(text_node);
+    transcriptFeed.appendChild(chunk);
     transcriptFeed.scrollTop = transcriptFeed.scrollHeight;
   }
 
   // ─── Fact-Check Cards ────────────────────────────────────────────────────
 
-  /**
-   * Render an array of fact-check results as verdict cards.
-   * Newest results are prepended so they appear at the top.
-   * @param {Array<{claim: string, verdict: string, confidence: number, sources: string[]}>} results
-   */
-  // Track rendered claims to avoid duplicates across analysis cycles
   const renderedClaims = new Set();
   const MAX_CARDS = 20;
 
@@ -123,34 +137,24 @@
     if (placeholder) placeholder.remove();
 
     results.forEach((item) => {
-      // Deduplicate by claim text (normalised)
       const key = item.claim.trim().toLowerCase();
       if (renderedClaims.has(key)) return;
       renderedClaims.add(key);
 
       factcheckList.prepend(buildClaimCard(item));
 
-      // Cap total cards to avoid the list growing forever
       const cards = factcheckList.querySelectorAll('.fl-claim-card');
-      if (cards.length > MAX_CARDS) {
-        cards[cards.length - 1].remove();
-      }
+      if (cards.length > MAX_CARDS) cards[cards.length - 1].remove();
     });
   }
 
-  /**
-   * Build a single claim card DOM element.
-   * @param {{claim: string, verdict: string, confidence: number, sources: string[]}} item
-   * @returns {HTMLElement}
-   */
   function buildClaimCard(item) {
     const { claim, verdict, confidence = 0, sources = [] } = item;
 
     const card = document.createElement('div');
-    // Add verdict class to card for the left-border color
     card.className = `fl-claim-card ${verdict.toLowerCase()}`;
 
-    // ── Header: claim text + verdict badge ──
+    // Header
     const header = document.createElement('div');
     header.className = 'fl-claim-header';
 
@@ -165,7 +169,7 @@
     header.appendChild(claimText);
     header.appendChild(badge);
 
-    // ── Confidence bar ──
+    // Confidence bar
     const confBar = document.createElement('div');
     confBar.className = 'fl-confidence-bar';
     const confFill = document.createElement('div');
@@ -173,7 +177,7 @@
     confFill.style.width = `${Math.round(confidence * 100)}%`;
     confBar.appendChild(confFill);
 
-    // ── Source links — show domain name instead of "Source N" ──
+    // Source links
     const sourcesEl = document.createElement('div');
     sourcesEl.className = 'fl-sources';
     sources.forEach((url) => {
@@ -185,22 +189,21 @@
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.textContent = domain;
-        link.title = url; // full URL on hover
+        link.title = url;
         sourcesEl.appendChild(link);
-      } catch {
-        // Skip malformed URLs
-      }
+      } catch { /* skip malformed URLs */ }
     });
 
     card.appendChild(header);
     card.appendChild(confBar);
-    // Show reasoning if available
+
     if (item.reasoning) {
       const reasoning = document.createElement('p');
       reasoning.className = 'fl-claim-reasoning';
       reasoning.textContent = item.reasoning;
       card.appendChild(reasoning);
     }
+
     if (sources.length > 0) card.appendChild(sourcesEl);
 
     return card;
@@ -208,21 +211,11 @@
 
   // ─── Bias Meter ──────────────────────────────────────────────────────────
 
-  /**
-   * Update the bias needle position and emotion bar.
-   * @param {{lean_score: number, emotion_score: number, framing_label: string}} data
-   *   lean_score:    -1.0 (far left) → 0.0 (center) → +1.0 (far right)
-   *   emotion_score:  0.0 (neutral)  → 1.0 (highly charged)
-   *   framing_label: plain-English description
-   */
   function updateBiasMeter({ lean_score = 0, emotion_score = 0, framing_label = '—' }) {
-    // Clamp inputs to valid ranges before calculating positions
     const lean    = Math.max(-1, Math.min(1, Number(lean_score)    || 0));
     const emotion = Math.max(0,  Math.min(1, Number(emotion_score) || 0));
 
-    const leftPct = ((lean + 1) / 2) * 100;
-    biasNeedle.style.left = `${leftPct.toFixed(1)}%`;
-
+    biasNeedle.style.left = `${(((lean + 1) / 2) * 100).toFixed(1)}%`;
     biasFraming.textContent = framing_label || '—';
 
     const emotionPct = Math.round(emotion * 100);
@@ -232,18 +225,12 @@
 
   // ─── Error Banner ─────────────────────────────────────────────────────────
 
-  /**
-   * Show a dismissible error banner at the top of the panel.
-   * Auto-hides after 5 seconds.
-   * @param {string} message
-   */
   function showError(message) {
     let banner = document.getElementById('fl-error-banner');
     if (!banner) {
       banner = document.createElement('div');
       banner.id = 'fl-error-banner';
       banner.className = 'fl-error-banner';
-      // Insert after the header
       const header = document.querySelector('.fl-header');
       header.insertAdjacentElement('afterend', banner);
     }
@@ -254,14 +241,9 @@
 
   // ─── Init ─────────────────────────────────────────────────────────────────
 
-  // When the panel first loads, ask the background script for the current
-  // session status. This handles the race condition where the STATUS message
-  // was broadcast before the panel's onMessage listener was registered.
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((response) => {
     if (response?.type === 'STATUS') updateStatus(response.payload);
-  }).catch(() => {
-    // Background may not be ready yet — safe to ignore
-  });
+  }).catch(() => {});
 
-  console.log('[FactLens] Side panel loaded and ready.');
+  console.log('[FactLens] Side panel loaded.');
 })();

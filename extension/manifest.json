@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FactLens",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Real-time audio transcription, fact-checking, and bias detection for any browser tab.",
 
   "permissions": [
