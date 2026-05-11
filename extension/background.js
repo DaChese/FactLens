@@ -17,8 +17,8 @@
 
 // Backend URL — swap this to your Railway deployment URL for production.
 // Local dev:  'http://localhost:3001'
-// Production: 'https://your-app.up.railway.app'
-const BACKEND_URL = 'http://localhost:3001';
+// Production: 'https://factlens-production.up.railway.app'
+const BACKEND_URL = 'https://factlens-production.up.railway.app';
 
 // Rolling transcript buffer — accumulates chunks across multiple Whisper responses.
 // Fact-check and bias analysis run against this buffer on a separate interval,
