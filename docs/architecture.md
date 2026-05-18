@@ -124,6 +124,7 @@ New words only → sidebar + rolling buffer
 | `FACTCHECK` | `Array<{claim, verdict, confidence, reasoning, sources}>` | Fact-check results |
 | `BIAS` | `{lean_score, emotion_score, framing_label}` | Bias analysis result |
 | `ERROR` | `string` | Human-readable error to display in the panel |
+| `BACKEND_STATUS` | `'checking' \| 'warming' \| 'ready'` | Backend cold-start state for warming banner |
 
 Internal messages (background ↔ offscreen, silently ignored by sidebar):
 
@@ -166,5 +167,5 @@ All keys live in `backend/.env` — never in the extension. The extension only e
 | 1 | Scaffold, extension shell, sidebar UI, backend stubs | ✅ Done |
 | 2 | Real audio capture (offscreen doc), Groq Whisper, audio passthrough | ✅ Done |
 | 3 | Groq LLM fact-checking + Tavily, bias analysis, rolling buffer, claim cache, Spanish support | ✅ Done |
-| 4 | UI polish, packaging | ⏳ Pending |
-| 5 | Error handling, performance tuning, final packaging | ⏳ Pending |
+| 4 | UI polish, stop button, timestamps, clear buttons, spinner, v1.1.0 | ✅ Done |
+| 5 | Railway deployment config, rate limiting, cold-start handling, onboarding screen, privacy policy | ✅ Done |

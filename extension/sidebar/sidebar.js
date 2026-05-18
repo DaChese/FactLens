@@ -1,5 +1,5 @@
 /**
- * sidebar.js — FactLens Side Panel UI Controller (Sprint 4)
+ * sidebar.js — FactLens Side Panel UI Controller
  */
 
 (function () {
@@ -18,6 +18,9 @@
   const emotionValue     = document.getElementById('fl-emotion-value');
   const clearTranscript  = document.getElementById('fl-clear-transcript');
   const clearFactcheck   = document.getElementById('fl-clear-factcheck');
+  const onboarding       = document.getElementById('fl-onboarding');
+  const mainContent      = document.getElementById('fl-main');
+  const warmingBanner    = document.getElementById('fl-warming-banner');
 
   // ─── Message Listener ────────────────────────────────────────────────────
 
@@ -26,11 +29,13 @@
     if (!type) return;
 
     switch (type) {
-      case 'STATUS':        updateStatus(payload);      break;
-      case 'TRANSCRIPT':    appendTranscript(payload);  break;
-      case 'FACTCHECK':     renderFactChecks(payload);  break;
-      case 'BIAS':          updateBiasMeter(payload);   break;
-      case 'ERROR':         showError(payload);         break;
+      case 'STATUS':         updateStatus(payload);         break;
+      case 'TRANSCRIPT':     appendTranscript(payload);     break;
+      case 'FACTCHECK':      renderFactChecks(payload);     break;
+      case 'BIAS':           updateBiasMeter(payload);      break;
+      case 'ERROR':          showError(payload);            break;
+      case 'BACKEND_STATUS': updateBackendStatus(payload);  break;
+      // Internal messages — silently ignored by the sidebar
       case 'START_RECORDING':
       case 'STOP_RECORDING':
       case 'AUDIO_CHUNK':
@@ -43,7 +48,6 @@
   // ─── Stop Button ─────────────────────────────────────────────────────────
 
   stopBtn.addEventListener('click', () => {
-    // Send a stop request to the background service worker
     chrome.runtime.sendMessage({ type: 'STOP_SESSION' }).catch(() => {});
   });
 
@@ -57,6 +61,39 @@
     factcheckList.innerHTML = '<p class="fl-placeholder">Claims will be verified as they are detected…</p>';
     renderedClaims.clear();
   });
+
+  // ─── Onboarding / Main toggle ────────────────────────────────────────────
+
+  /**
+   * Show the main content panels and hide the onboarding screen.
+   * Called the first time a session becomes active.
+   */
+  function showMain() {
+    onboarding.hidden = true;
+    mainContent.hidden = false;
+  }
+
+  /**
+   * Show the onboarding screen and hide the main content.
+   * Called when the session goes idle and no transcript has been captured yet.
+   */
+  function showOnboarding() {
+    // Only go back to onboarding if there's no transcript content yet
+    if (transcriptFeed.querySelector('.fl-transcript-chunk')) return;
+    onboarding.hidden = false;
+    mainContent.hidden = true;
+  }
+
+  // ─── Backend Status Banner ────────────────────────────────────────────────
+
+  function updateBackendStatus(status) {
+    if (status === 'warming') {
+      warmingBanner.hidden = false;
+    } else {
+      // 'checking' or 'ready' — hide the banner
+      warmingBanner.hidden = true;
+    }
+  }
 
   // ─── Status ──────────────────────────────────────────────────────────────
 
@@ -74,11 +111,13 @@
     if (status === 'listening' || status === 'processing') {
       statusDot.classList.add(status);
       stopBtn.hidden = false;
-      // Show spinner in transcript feed if it's still showing the placeholder
+      showMain();
       showSpinnerIfEmpty();
     } else {
       stopBtn.hidden = true;
+      warmingBanner.hidden = true;
       removeSpinner();
+      showOnboarding();
     }
   }
 
@@ -111,16 +150,15 @@
     const chunk = document.createElement('div');
     chunk.className = 'fl-transcript-chunk';
 
-    // Timestamp
     const time = document.createElement('span');
     time.className = 'fl-transcript-time';
     time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    const text_node = document.createElement('span');
-    text_node.textContent = text;
+    const textNode = document.createElement('span');
+    textNode.textContent = text;
 
     chunk.appendChild(time);
-    chunk.appendChild(text_node);
+    chunk.appendChild(textNode);
     transcriptFeed.appendChild(chunk);
     transcriptFeed.scrollTop = transcriptFeed.scrollHeight;
   }
@@ -236,13 +274,15 @@
     }
     banner.textContent = message;
     banner.classList.add('visible');
-    setTimeout(() => banner.classList.remove('visible'), 5000);
+    setTimeout(() => banner.classList.remove('visible'), 6000);
   }
 
   // ─── Init ─────────────────────────────────────────────────────────────────
 
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((response) => {
-    if (response?.type === 'STATUS') updateStatus(response.payload);
+    if (response?.type === 'STATUS') {
+      updateStatus(response.payload);
+    }
   }).catch(() => {});
 
   console.log('[FactLens] Side panel loaded.');

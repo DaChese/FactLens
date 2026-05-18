@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FactLens — Privacy Policy</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 720px;
+      margin: 48px auto;
+      padding: 0 24px;
+      color: #1a1a2e;
+      line-height: 1.7;
+    }
+    h1 { font-size: 28px; margin-bottom: 4px; }
+    h2 { font-size: 18px; margin-top: 32px; margin-bottom: 8px; }
+    p, li { font-size: 15px; color: #333; }
+    ul { padding-left: 20px; }
+    a { color: #5c6bc0; }
+    .updated { font-size: 13px; color: #888; margin-bottom: 32px; }
+  </style>
+</head>
+<body>
+
+  <h1>FactLens Privacy Policy</h1>
+  <p class="updated">Last updated: May 2026</p>
+
+  <p>
+    FactLens is a Chrome extension that captures audio from your browser tab,
+    transcribes it in real time, and analyzes it for factual claims and language bias.
+    This policy explains what data is collected, how it is used, and what is never stored.
+  </p>
+
+  <h2>What data FactLens processes</h2>
+  <ul>
+    <li>
+      <strong>Audio from the active tab.</strong> When you start a session, FactLens
+      captures the audio stream from the tab you are currently viewing. This audio is
+      split into short clips (approximately 6 seconds each) and sent to our backend
+      server for transcription.
+    </li>
+    <li>
+      <strong>Transcript text.</strong> The transcribed text is sent to our backend
+      for fact-checking and bias analysis. Short excerpts (~150 words) are sent to
+      third-party AI services (Groq) and a web search service (Tavily) to produce
+      verdicts and analysis results.
+    </li>
+  </ul>
+
+  <h2>What FactLens does NOT do</h2>
+  <ul>
+    <li>We do not store audio recordings. Audio clips are processed in memory and discarded immediately after transcription.</li>
+    <li>We do not store transcript text. Text is processed in memory and not written to any database or log file.</li>
+    <li>We do not collect any personally identifiable information (name, email, location, etc.).</li>
+    <li>We do not track browsing history or which websites you visit.</li>
+    <li>We do not sell or share any data with advertisers or data brokers.</li>
+    <li>We do not capture audio from your microphone — only from the tab's audio output.</li>
+  </ul>
+
+  <h2>Third-party services</h2>
+  <p>
+    FactLens uses the following third-party services to process your data. By using
+    FactLens, you agree to their respective privacy policies.
+  </p>
+  <ul>
+    <li>
+      <strong>Groq</strong> (<a href="https://groq.com/privacy-policy" target="_blank" rel="noopener noreferrer">privacy policy</a>) —
+      used for audio transcription (Whisper) and language analysis (LLaMA). Audio clips
+      and transcript text are sent to Groq's API for processing.
+    </li>
+    <li>
+      <strong>Tavily</strong> (<a href="https://tavily.com/privacy" target="_blank" rel="noopener noreferrer">privacy policy</a>) —
+      used for web search to verify factual claims. Extracted claim text is sent to
+      Tavily's search API.
+    </li>
+  </ul>
+
+  <h2>Permissions used</h2>
+  <ul>
+    <li><strong>tabCapture</strong> — to capture audio from the active browser tab for transcription.</li>
+    <li><strong>activeTab</strong> — to identify which tab to capture audio from.</li>
+    <li><strong>scripting</strong> — to inject the content script for future in-page features.</li>
+    <li><strong>storage</strong> — to store session state locally so the panel stays in sync if the service worker restarts. No personal data is stored.</li>
+    <li><strong>sidePanel</strong> — to render the FactLens UI in Chrome's native side panel.</li>
+    <li><strong>offscreen</strong> — to run audio capture in a hidden document, which is required by Chrome's MV3 architecture.</li>
+  </ul>
+
+  <h2>Data retention</h2>
+  <p>
+    No audio or transcript data is retained after your session ends. The in-memory
+    claim cache on the backend server (used to avoid re-checking the same claim twice)
+    is cleared whenever the server restarts and is never written to disk.
+  </p>
+
+  <h2>Children's privacy</h2>
+  <p>
+    FactLens is not directed at children under 13. We do not knowingly collect any
+    information from children.
+  </p>
+
+  <h2>Changes to this policy</h2>
+  <p>
+    If we make material changes to this policy, we will update the "Last updated" date
+    above and post the new version at this URL.
+  </p>
+
+  <h2>Contact</h2>
+  <p>
+    If you have questions about this privacy policy, please open an issue on the
+    <a href="https://github.com/DaChese/factlens" target="_blank" rel="noopener noreferrer">FactLens GitHub repository</a>.
+  </p>
+
+</body>
+</html>

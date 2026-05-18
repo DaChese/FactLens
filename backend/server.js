@@ -6,11 +6,13 @@
  *  - Load API keys from .env (never expose them to the extension)
  *  - Mount route handlers for /transcribe, /factcheck, and /bias
  *  - Enable CORS for the extension origin
+ *  - Rate-limit API routes to protect free-tier quotas
  */
 
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import { rateLimit } from 'express-rate-limit';
 
 import transcribeRouter from './routes/transcribe.js';
 import factcheckRouter  from './routes/factcheck.js';
@@ -52,13 +54,44 @@ app.use(cors({
 // Parse JSON bodies
 app.use(express.json());
 
+// Basic security headers
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+
+// ─── Rate Limiting ───────────────────────────────────────────────────────────
+// Protects free-tier Groq and Tavily quotas from runaway clients or bugs.
+// Limits are per IP — generous enough for normal use, tight enough to prevent abuse.
+
+// Transcription: audio chunk every ~3s per tab → 20 requests/min is plenty
+const transcribeLimiter = rateLimit({
+  windowMs:         60 * 1000, // 1 minute
+  max:              20,
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message:          { error: 'Too many transcription requests. Please wait a moment.' },
+});
+
+// Analysis: runs every 20s → 5 requests/min per route is generous
+const analysisLimiter = rateLimit({
+  windowMs:         60 * 1000,
+  max:              5,
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message:          { error: 'Too many analysis requests. Please wait a moment.' },
+});
+
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.use('/transcribe', transcribeRouter);
-app.use('/factcheck',  factcheckRouter);
-app.use('/bias',       biasRouter);
+app.use('/transcribe', transcribeLimiter, transcribeRouter);
+app.use('/factcheck',  analysisLimiter,   factcheckRouter);
+app.use('/bias',       analysisLimiter,   biasRouter);
 
-// Health check — useful for verifying the server is up
+// Health check — used by Railway for deployment health and by the extension
+// to detect cold starts before showing a "warming up" message.
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });

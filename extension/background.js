@@ -20,6 +20,15 @@
 // Production: 'https://factlens-production.up.railway.app'
 const BACKEND_URL = 'https://factlens-production.up.railway.app';
 
+// How long to wait for the backend to respond before showing a cold-start warning.
+// Railway free tier can take up to 10s to wake from sleep.
+const COLD_START_TIMEOUT_MS = 12000;
+
+// Keep-alive ping interval — pings /health every 4 minutes to prevent Railway
+// free tier from sleeping during an active session.
+const KEEPALIVE_INTERVAL_MS = 4 * 60 * 1000;
+let keepAliveTimer = null;
+
 // Rolling transcript buffer — accumulates chunks across multiple Whisper responses.
 // Fact-check and bias analysis run against this buffer on a separate interval,
 // so analysis updates more frequently than the 8s audio chunk cycle.
@@ -84,9 +93,11 @@ async function getSessionActive(tabId) {
 
 /**
  * Start a capture session:
- *  1. Get a stream ID from tabCapture (works in SW via getMediaStreamId)
- *  2. Create the offscreen document
- *  3. Tell the offscreen doc to start recording with that stream ID
+ *  1. Ping /health — if the backend is cold, show a "warming up" message
+ *     and wait for it to respond before proceeding.
+ *  2. Get a stream ID from tabCapture (works in SW via getMediaStreamId)
+ *  3. Create the offscreen document
+ *  4. Tell the offscreen doc to start recording with that stream ID
  */
 async function startSession(tab) {
   await setSessionActive(tab.id);
@@ -95,6 +106,22 @@ async function startSession(tab) {
   transcriptBuffers[tab.id] = [];
 
   broadcast({ type: 'STATUS', payload: 'listening' });
+
+  // ── Backend health check ──
+  // Ping /health before starting capture. If the backend is cold (Railway
+  // free tier sleeps after inactivity), this wakes it up and we show a
+  // "warming up" message so the user knows to wait a few seconds.
+  try {
+    broadcast({ type: 'BACKEND_STATUS', payload: 'checking' });
+    await pingBackendWithRetry();
+    broadcast({ type: 'BACKEND_STATUS', payload: 'ready' });
+  } catch (err) {
+    broadcast({ type: 'ERROR', payload: 'Cannot reach the FactLens server. Check your connection or try again.' });
+    broadcast({ type: 'STATUS', payload: 'idle' });
+    await clearSessionActive(tab.id);
+    delete transcriptBuffers[tab.id];
+    return;
+  }
 
   try {
     const streamId = await new Promise((resolve, reject) => {
@@ -123,6 +150,11 @@ async function startSession(tab) {
       runAnalysis(tab.id);
     }, ANALYSIS_INTERVAL_MS);
 
+    // Keep-alive ping — prevents Railway free tier from sleeping mid-session
+    keepAliveTimer = setInterval(() => {
+      fetch(`${BACKEND_URL}/health`).catch(() => {});
+    }, KEEPALIVE_INTERVAL_MS);
+
     console.log(`[FactLens] Session started for tab ${tab.id}`);
 
   } catch (err) {
@@ -135,6 +167,41 @@ async function startSession(tab) {
 }
 
 /**
+ * Ping /health with retries to handle Railway cold starts.
+ * Shows a "warming up" broadcast after the first timeout so the user
+ * knows the server is waking up, not broken.
+ * Throws if the backend doesn't respond within COLD_START_TIMEOUT_MS.
+ */
+async function pingBackendWithRetry() {
+  const PING_TIMEOUT_MS = 5000;
+  const MAX_ATTEMPTS    = 3;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PING_TIMEOUT_MS);
+      const res = await fetch(`${BACKEND_URL}/health`, { signal: controller.signal });
+      clearTimeout(timer);
+      if (res.ok) return; // backend is up
+    } catch {
+      // Timed out or network error
+    }
+
+    if (attempt === 1) {
+      // First failure — server is probably cold-starting, let the user know
+      broadcast({ type: 'BACKEND_STATUS', payload: 'warming' });
+      console.log('[FactLens] Backend cold start detected, waiting...');
+    }
+
+    if (attempt < MAX_ATTEMPTS) {
+      await new Promise(r => setTimeout(r, 4000)); // wait 4s between retries
+    }
+  }
+
+  throw new Error('Backend unreachable after retries');
+}
+
+/**
  * Stop the current session and tear down the offscreen document.
  * @param {number} tabId
  */
@@ -143,6 +210,12 @@ async function stopSession(tabId) {
   if (analysisIntervals[tabId]) {
     clearInterval(analysisIntervals[tabId]);
     delete analysisIntervals[tabId];
+  }
+
+  // Stop the keep-alive ping
+  if (keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
   }
 
   // Clear the rolling buffer and language
