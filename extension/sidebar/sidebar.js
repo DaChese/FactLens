@@ -20,7 +20,6 @@
   const clearFactcheck   = document.getElementById('fl-clear-factcheck');
   const onboarding       = document.getElementById('fl-onboarding');
   const mainContent      = document.getElementById('fl-main');
-  const warmingBanner    = document.getElementById('fl-warming-banner');
 
   // ─── Message Listener ────────────────────────────────────────────────────
 
@@ -36,11 +35,11 @@
       case 'FACTCHECK':      renderFactChecks(payload);     break;
       case 'BIAS':           updateBiasMeter(payload);      break;
       case 'ERROR':          showError(payload);            break;
-      case 'BACKEND_STATUS': updateBackendStatus(payload);  break;
       // Internal messages — silently ignored by the sidebar
       case 'START_RECORDING':
       case 'STOP_RECORDING':
       case 'AUDIO_CHUNK':
+      case 'BACKEND_STATUS':
         break;
       default:
         console.warn('[FactLens Sidebar] Unknown message type:', type);
@@ -86,20 +85,6 @@
     mainContent.hidden = true;
   }
 
-  // ─── Backend Status Banner ────────────────────────────────────────────────
-
-  function updateBackendStatus(status) {
-    console.log(`[FactLens Sidebar] updateBackendStatus called with: "${status}"`);
-    if (status === 'warming') {
-      console.log('[FactLens Sidebar] Showing warming banner');
-      warmingBanner.hidden = false;
-    } else {
-      // 'checking' or 'ready' — hide the banner
-      console.log('[FactLens Sidebar] Hiding warming banner');
-      warmingBanner.hidden = true;
-    }
-  }
-
   // ─── Status ──────────────────────────────────────────────────────────────
 
   function updateStatus(status) {
@@ -120,7 +105,6 @@
       showSpinnerIfEmpty();
     } else {
       stopBtn.hidden = true;
-      warmingBanner.hidden = true;
       removeSpinner();
       showOnboarding();
     }
