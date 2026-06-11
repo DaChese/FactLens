@@ -112,10 +112,14 @@ async function startSession(tab) {
   // free tier sleeps after inactivity), this wakes it up and we show a
   // "warming up" message so the user knows to wait a few seconds.
   try {
+    console.log('[FactLens] Starting backend health check...');
     broadcast({ type: 'BACKEND_STATUS', payload: 'checking' });
     await pingBackendWithRetry();
+    console.log('[FactLens] Backend health check passed, broadcasting ready');
     broadcast({ type: 'BACKEND_STATUS', payload: 'ready' });
   } catch (err) {
+    console.error('[FactLens] Backend health check failed:', err.message);
+    broadcast({ type: 'BACKEND_STATUS', payload: 'ready' }); // Hide warming banner
     broadcast({ type: 'ERROR', payload: 'Cannot reach the FactLens server. Check your connection or try again.' });
     broadcast({ type: 'STATUS', payload: 'idle' });
     await clearSessionActive(tab.id);
@@ -168,36 +172,56 @@ async function startSession(tab) {
 
 /**
  * Ping /health with retries to handle Railway cold starts.
- * Shows a "warming up" broadcast after the first timeout so the user
- * knows the server is waking up, not broken.
- * Throws if the backend doesn't respond within COLD_START_TIMEOUT_MS.
+ * Uses aggressive retries (fast first check) to minimize user wait time.
+ * Throws if the backend doesn't respond.
  */
 async function pingBackendWithRetry() {
-  const PING_TIMEOUT_MS = 5000;
-  const MAX_ATTEMPTS    = 3;
+  const ATTEMPTS = [
+    { timeout: 1500, waitAfter: 500 },  // Attempt 1: 1.5s timeout, 0.5s wait
+    { timeout: 2000, waitAfter: 1000 }, // Attempt 2: 2s timeout, 1s wait
+    { timeout: 3000, waitAfter: 0 },    // Attempt 3: 3s timeout, no wait
+  ];
+  let showedWarmingMessage = false;
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let i = 0; i < ATTEMPTS.length; i++) {
+    const { timeout, waitAfter } = ATTEMPTS[i];
+    const attempt = i + 1;
+    console.log(`[FactLens] Ping attempt ${attempt}/${ATTEMPTS.length} (${timeout}ms timeout)...`);
+    
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), PING_TIMEOUT_MS);
+      const timer = setTimeout(() => controller.abort(), timeout);
       const res = await fetch(`${BACKEND_URL}/health`, { signal: controller.signal });
       clearTimeout(timer);
-      if (res.ok) return; // backend is up
-    } catch {
-      // Timed out or network error
+      
+      if (res.ok) {
+        console.log(`[FactLens] ✓ Ping attempt ${attempt} succeeded (status ${res.status})`);
+        if (showedWarmingMessage) {
+          console.log('[FactLens] Backend responded after cold start');
+        }
+        return; // Success!
+      } else {
+        console.log(`[FactLens] ✗ Ping attempt ${attempt} returned status ${res.status}`);
+      }
+    } catch (err) {
+      console.log(`[FactLens] ✗ Ping attempt ${attempt} timed out or failed: ${err.message}`);
     }
 
-    if (attempt === 1) {
-      // First failure — server is probably cold-starting, let the user know
+    // If first attempt timed out, show warming message on next iteration
+    if (i === 0 && !showedWarmingMessage) {
+      console.log('[FactLens] First attempt failed, showing warming message...');
       broadcast({ type: 'BACKEND_STATUS', payload: 'warming' });
-      console.log('[FactLens] Backend cold start detected, waiting...');
+      showedWarmingMessage = true;
     }
 
-    if (attempt < MAX_ATTEMPTS) {
-      await new Promise(r => setTimeout(r, 4000)); // wait 4s between retries
+    // Wait before next attempt (if not the last one)
+    if (waitAfter > 0) {
+      console.log(`[FactLens] Waiting ${waitAfter}ms before next attempt...`);
+      await new Promise(r => setTimeout(r, waitAfter));
     }
   }
 
+  console.error('[FactLens] All ping attempts failed, throwing error');
   throw new Error('Backend unreachable after retries');
 }
 

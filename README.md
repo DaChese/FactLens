@@ -61,9 +61,10 @@ curl http://localhost:3001/health
 
 1. Open any tab with audio — YouTube, a podcast, a news stream
 2. Click the FactLens icon
-3. The side panel opens and starts listening
-4. Transcript shows up within a few seconds, fact-checks roll in after about 20 seconds
-5. Click the **stop button** in the panel header (or the toolbar icon again) to stop
+3. The side panel opens with onboarding instructions (or starts listening if already active)
+4. **First time setup** — the backend may take up to 10 seconds to wake (Railway free tier cold starts). You'll see a "Server is waking up" message; just wait
+5. Transcript shows up within a few seconds, fact-checks roll in after about 20 seconds
+6. Click the **stop button** in the panel header (or the toolbar icon again) to stop
 
 ## API Keys
 
@@ -80,20 +81,20 @@ Don't commit `.env` to git — your keys stay local.
 
 ## How it actually works under the hood
 
-Chrome's MV3 extensions can't directly access audio streams in a service worker, so there's a bit of a relay happening:
+Chrome's MV3 extensions can't directly access audio streams in a service worker, so there's a relay:
 
-1. You click the icon → the side panel opens
-2. The service worker gets a stream ID from Chrome's tab capture API
-3. That ID gets passed to a hidden "offscreen document" which does the actual audio capture
-4. The audio is also routed back to your speakers so you can still hear everything
-5. Every 3 seconds, a 6-second overlapping audio clip gets sent to the backend
-6. Groq Whisper transcribes it and detects the language
-7. The transcript shows up in the panel immediately
-8. Every 20 seconds, the last ~150 words get analyzed for claims and bias
-9. For each claim: Tavily searches the web, then the LLM reads the results and gives a verdict
-10. Claims are cached for an hour so the same claim doesn't get re-searched every cycle
+1. You click the icon → service worker checks if backend is reachable (3 retries, ~9 seconds max)
+2. If the backend is cold-starting (Railway free tier), a "waking up" message appears briefly
+3. Service worker gets a stream ID from Chrome's tab capture API
+4. Stream ID is passed to a hidden "offscreen document" which captures audio
+5. Audio is routed back to your speakers (you hear everything normally)
+6. Every 3 seconds: 6-second overlapping audio clip → backend → Groq Whisper → transcript
+7. Transcript appears in the panel within ~3s
+8. Every 20 seconds: last ~150 words → LLM extracts claims → Tavily searches → verdict
+9. Fact-checks appear as cards with claim, verdict (True/False/Unverified), confidence, and sources
+10. Claims are cached for 1 hour to avoid redundant searches
 
-The 6-second overlapping window is what prevents words from getting dropped at chunk boundaries — each clip shares 3 seconds with the previous one, so nothing falls through the cracks.
+The 6-second overlapping window (3-second overlap between clips) prevents words from dropping at chunk boundaries — each clip shares context with the previous one.
 
 ## What the fact-check cards show
 
@@ -132,10 +133,13 @@ factlens/
 - [x] Sprint 3 — Fact-checking, bias analysis, claim cache, Spanish support, overlap fix
 - [x] Sprint 4 — Stop button, timestamps, clear buttons, spinner, UI polish, v1.1.0
 - [x] Sprint 5 — Railway deployment config, production-ready backend
+- [x] Sprint 6 — Cold-start UI fixes (warming banner no longer hangs), faster retry logic (~9s), compact onboarding screen
 
 ## Things to know
 
-- After deploying to Railway, update `BACKEND_URL` in `extension/background.js` with your Railway URL
-- The claim cache resets when the backend restarts
-- Bias analysis looks at *how* something is said, not *what* is being said
-- First transcript shows up after about 6 seconds, first fact-checks after about 20 seconds
+- **Cold starts**: If using Railway free tier, the first activation may show "Server is waking up" for up to 10 seconds. This is normal; the backend is spinning up. Subsequent uses are instant
+- **After Railway deploy**: Update `BACKEND_URL` in `extension/background.js` with your Railway URL
+- **Claim cache**: Resets when the backend restarts; designed to avoid redundant searches
+- **Bias analysis**: Detects *how* claims are framed and spoken, not just *what* is being claimed
+- **Timing**: First transcript ~3s, first fact-checks ~20s, subsequent updates every 20s
+- **If stuck on warming banner**: Refresh the extension or check your internet connection. If backend is truly unreachable, an error message will appear

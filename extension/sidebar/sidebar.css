@@ -481,29 +481,27 @@ body {
   align-items: center;
   justify-content: center;
   flex: 1;
-  padding: 32px 24px;
+  padding: 20px 16px;
   text-align: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .fl-onboarding-icon {
-  font-size: 48px;
+  font-size: 40px;
   line-height: 1;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .fl-onboarding-title {
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: 0.5px;
+  margin-bottom: 4px;
 }
 
 .fl-onboarding-subtitle {
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  max-width: 240px;
+  display: none; /* Removed for compact layout */
 }
 
 .fl-onboarding-steps {
@@ -512,7 +510,7 @@ body {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   text-align: left;
   width: 100%;
   counter-reset: steps;
@@ -521,10 +519,10 @@ body {
 .fl-onboarding-steps li {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  font-size: 12px;
+  gap: 8px;
+  font-size: 11px;
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: 1.4;
   counter-increment: steps;
 }
 
@@ -533,13 +531,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  min-width: 20px;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   margin-top: 1px;
 }
@@ -549,10 +547,10 @@ body {
 }
 
 .fl-onboarding-note {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--text-secondary);
   opacity: 0.7;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 /* ── Main content wrapper ─────────────────────────────────────────────────── */

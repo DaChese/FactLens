@@ -28,6 +28,8 @@
     const { type, payload } = message || {};
     if (!type) return;
 
+    console.log(`[FactLens Sidebar] Message received: ${type}`, payload);
+
     switch (type) {
       case 'STATUS':         updateStatus(payload);         break;
       case 'TRANSCRIPT':     appendTranscript(payload);     break;
@@ -87,10 +89,13 @@
   // ─── Backend Status Banner ────────────────────────────────────────────────
 
   function updateBackendStatus(status) {
+    console.log(`[FactLens Sidebar] updateBackendStatus called with: "${status}"`);
     if (status === 'warming') {
+      console.log('[FactLens Sidebar] Showing warming banner');
       warmingBanner.hidden = false;
     } else {
       // 'checking' or 'ready' — hide the banner
+      console.log('[FactLens Sidebar] Hiding warming banner');
       warmingBanner.hidden = true;
     }
   }
