@@ -132,7 +132,7 @@ factlens/
 - [x] Sprint 3 — Fact-checking, bias analysis, claim cache, Spanish support, overlap fix
 - [x] Sprint 4 — Stop button, timestamps, clear buttons, spinner, UI polish, v1.1.0
 - [x] Sprint 5 — Railway deployment config, production-ready backend
-- [ ] Sprint 6 - Cold-start UI fixes, faster retry feedback, compact onboarding screen
+- [x] Sprint 6 - Cold-start UI fixes, faster retry feedback, compact onboarding screen
 
 ## Things to know
 

@@ -86,6 +86,11 @@ async function getSessionActive(tabId) {
   return !!activeSessions[tabId];
 }
 
+async function setBackendStatus(status) {
+  await chrome.storage.session.set({ backendStatus: status });
+  broadcast({ type: 'BACKEND_STATUS', payload: status });
+}
+
 // ─── Session Management ──────────────────────────────────────────────────────
 
 /**
@@ -110,13 +115,13 @@ async function startSession(tab) {
   // "warming up" message so the user knows to wait a few seconds.
   try {
     console.log('[FactLens] Starting backend health check...');
-    broadcast({ type: 'BACKEND_STATUS', payload: 'checking' });
+    await setBackendStatus('checking');
     await pingBackendWithRetry();
     console.log('[FactLens] Backend health check passed, broadcasting ready');
-    broadcast({ type: 'BACKEND_STATUS', payload: 'ready' });
+    await setBackendStatus('ready');
   } catch (err) {
     console.error('[FactLens] Backend health check failed:', err.message);
-    broadcast({ type: 'BACKEND_STATUS', payload: 'ready' }); // Hide warming banner
+    await setBackendStatus('ready'); // Hide warming banner
     broadcast({ type: 'ERROR', payload: 'Cannot reach the FactLens server. Check your connection or try again.' });
     broadcast({ type: 'STATUS', payload: 'idle' });
     await clearSessionActive(tab.id);
@@ -161,6 +166,7 @@ async function startSession(tab) {
   } catch (err) {
     console.error('[FactLens] startSession error:', err.message);
     broadcast({ type: 'ERROR', payload: `Could not start capture: ${err.message}` });
+    await setBackendStatus('ready');
     broadcast({ type: 'STATUS', payload: 'idle' });
     await clearSessionActive(tab.id);
     delete transcriptBuffers[tab.id];
@@ -207,7 +213,7 @@ async function pingBackendWithRetry() {
     // If first attempt timed out, show warming message on next iteration
     if (i === 0 && !showedWarmingMessage) {
       console.log('[FactLens] First attempt failed, showing warming message...');
-      broadcast({ type: 'BACKEND_STATUS', payload: 'warming' });
+      await setBackendStatus('warming');
       showedWarmingMessage = true;
     }
 
@@ -250,6 +256,7 @@ async function stopSession(tabId) {
 
   await closeOffscreenDocument();
   await clearSessionActive(tabId);
+  await setBackendStatus('ready');
   broadcast({ type: 'STATUS', payload: 'idle' });
   console.log(`[FactLens] Session stopped for tab ${tabId}`);
 }
@@ -335,9 +342,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     // Request from the side panel on load — reply with current session state
     case 'GET_STATUS':
-      chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {
+      chrome.storage.session.get(['activeSessions', 'backendStatus']).then(({ activeSessions = {}, backendStatus = 'ready' }) => {
         const hasActive = Object.keys(activeSessions).length > 0;
-        sendResponse({ type: 'STATUS', payload: hasActive ? 'listening' : 'idle' });
+        sendResponse({
+          type: 'STATUS',
+          payload: hasActive ? 'listening' : 'idle',
+          backendStatus,
+        });
       });
       return true; // keep channel open for async response
   }

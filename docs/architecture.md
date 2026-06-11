@@ -79,4 +79,4 @@ Express backend on Railway or localhost
 | 3 | Groq LLM fact-checking, Tavily search, bias analysis, rolling buffer, claim cache, Spanish support | Done |
 | 4 | UI polish, stop button, timestamps, clear buttons, spinner, v1.1.0 | Done |
 | 5 | Railway deployment config, production backend hardening, rate limiting, privacy policy | Done after hardening pass |
-| 6 | Cold-start UI handling, faster retry feedback, compact onboarding | Planned |
+| 6 | Cold-start UI handling, faster retry feedback, compact onboarding | Done |

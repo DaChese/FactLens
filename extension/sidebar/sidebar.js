@@ -20,6 +20,7 @@
   const clearFactcheck   = document.getElementById('fl-clear-factcheck');
   const onboarding       = document.getElementById('fl-onboarding');
   const mainContent      = document.getElementById('fl-main');
+  const backendBanner    = document.getElementById('fl-backend-banner');
 
   // ─── Message Listener ────────────────────────────────────────────────────
 
@@ -35,11 +36,11 @@
       case 'FACTCHECK':      renderFactChecks(payload);     break;
       case 'BIAS':           updateBiasMeter(payload);      break;
       case 'ERROR':          showError(payload);            break;
+      case 'BACKEND_STATUS': updateBackendStatus(payload);  break;
       // Internal messages — silently ignored by the sidebar
       case 'START_RECORDING':
       case 'STOP_RECORDING':
       case 'AUDIO_CHUNK':
-      case 'BACKEND_STATUS':
         break;
       default:
         console.warn('[FactLens Sidebar] Unknown message type:', type);
@@ -238,16 +239,35 @@
 
   // ─── Bias Meter ──────────────────────────────────────────────────────────
 
-  function updateBiasMeter({ lean_score = 0, emotion_score = 0, framing_label = '—' }) {
+  function updateBiasMeter({ lean_score = 0, emotion_score = 0, framing_label = '-' }) {
     const lean    = Math.max(-1, Math.min(1, Number(lean_score)    || 0));
     const emotion = Math.max(0,  Math.min(1, Number(emotion_score) || 0));
 
     biasNeedle.style.left = `${(((lean + 1) / 2) * 100).toFixed(1)}%`;
-    biasFraming.textContent = framing_label || '—';
+    biasFraming.textContent = framing_label || '-';
 
     const emotionPct = Math.round(emotion * 100);
     emotionFill.style.width = `${emotionPct}%`;
     emotionValue.textContent = `${emotionPct}%`;
+  }
+
+  function updateBackendStatus(status) {
+    backendBanner.classList.remove('checking', 'warming');
+
+    const messages = {
+      checking: 'Checking the FactLens server...',
+      warming:  'Server is waking up. This can take a few seconds on Railway.',
+    };
+
+    if (!messages[status]) {
+      backendBanner.hidden = true;
+      backendBanner.textContent = '';
+      return;
+    }
+
+    backendBanner.textContent = messages[status];
+    backendBanner.classList.add(status);
+    backendBanner.hidden = false;
   }
 
   // ─── Error Banner ─────────────────────────────────────────────────────────
@@ -271,6 +291,7 @@
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((response) => {
     if (response?.type === 'STATUS') {
       updateStatus(response.payload);
+      updateBackendStatus(response.backendStatus);
     }
   }).catch(() => {});
 
