@@ -112,7 +112,6 @@ factlens/
 ├── extension/
 │   ├── manifest.json        # Chrome extension config
 │   ├── background.js        # Service worker — the brain of the operation
-│   ├── content.js           # Content script (placeholder for future features)
 │   ├── offscreen.html/js    # Hidden doc that handles audio capture
 │   └── sidebar/             # The side panel UI
 ├── backend/
@@ -133,7 +132,7 @@ factlens/
 - [x] Sprint 3 — Fact-checking, bias analysis, claim cache, Spanish support, overlap fix
 - [x] Sprint 4 — Stop button, timestamps, clear buttons, spinner, UI polish, v1.1.0
 - [x] Sprint 5 — Railway deployment config, production-ready backend
-- [x] Sprint 6 — Cold-start UI fixes (warming banner no longer hangs), faster retry logic (~9s), compact onboarding screen
+- [ ] Sprint 6 - Cold-start UI fixes, faster retry feedback, compact onboarding screen
 
 ## Things to know
 

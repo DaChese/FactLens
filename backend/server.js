@@ -31,6 +31,9 @@ if (missing.length > 0) {
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
+// Railway runs Express behind a proxy; trust one hop so IP-based rate limits work.
+app.set('trust proxy', 1);
+
 // ─── Middleware ──────────────────────────────────────────────────────────────
 
 // Allow requests from the Chrome extension (chrome-extension://* scheme)

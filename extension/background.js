@@ -20,9 +20,6 @@
 // Production: 'https://factlens-production.up.railway.app'
 const BACKEND_URL = 'https://factlens-production.up.railway.app';
 
-// How long to wait for the backend to respond before showing a cold-start warning.
-// Railway free tier can take up to 10s to wake from sleep.
-const COLD_START_TIMEOUT_MS = 12000;
 
 // Keep-alive ping interval — pings /health every 4 minutes to prevent Railway
 // free tier from sleeping during an active session.

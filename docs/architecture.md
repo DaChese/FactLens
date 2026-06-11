@@ -1,56 +1,29 @@
-# FactLens — Architecture Overview
+# FactLens - Architecture Overview
 
 ## System Diagram
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Chrome Browser                                                          │
-│                                                                          │
-│  ┌──────────────┐  tabCapture   ┌───────────────────────────────────┐   │
-│  │  Active Tab  │ ────────────► │  background.js (Service Worker)   │   │
-│  │  (any page)  │               │                                   │   │
-│  │              │               │  • Opens Side Panel               │   │
-│  │ ┌──────────┐ │               │  • Gets stream ID (tabCapture)    │   │
-│  │ │content.js│ │               │  • Manages session state          │   │
-│  │ │(future   │ │               │  • Rolling 150-word buffer        │   │
-│  │ │ in-page  │ │               │  • 20s analysis interval          │   │
-│  │ │ features)│ │               │  • Overlap deduplication          │   │
-│  │ └──────────┘ │               │  • Broadcasts to side panel       │   │
-│  └──────────────┘               └──────────────┬────────────────────┘   │
-│                                                │                         │
-│                          ┌─────────────────────┘                         │
-│                          │ START_RECORDING / AUDIO_CHUNK                 │
-│                          ▼                                               │
-│              ┌───────────────────────────┐                               │
-│              │  offscreen.js             │                               │
-│              │  (Offscreen Document)     │                               │
-│              │                           │                               │
-│              │  • getUserMedia (stream)  │                               │
-│              │  • AudioContext passthru  │                               │
-│              │  • MediaRecorder 500ms    │                               │
-│              │  • Ring buffer (6s / 12  │                               │
-│              │    slots, 3s overlap)     │                               │
-│              │  • Base64 encode → send  │                               │
-│              └───────────────────────────┘                               │
-│                                                                          │
-│              ┌───────────────────────────────────────────────────────┐   │
-│              │  Chrome Side Panel  (sidebar/sidebar.html)            │   │
-│              │                                                       │   │
-│              │  • Live transcript feed                               │   │
-│              │  • Fact-check verdict cards (True/False/Unverified)   │   │
-│              │  • Political lean meter (Left ←→ Right)              │   │
-│              │  • Emotional charge bar                               │   │
-│              └───────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────────┘
-                          │ HTTP (localhost:3001)
-                          ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Node.js / Express Backend                                          │
-│                                                                     │
-│  POST /transcribe ──► Groq Whisper (whisper-large-v3-turbo)         │
-│  POST /factcheck  ──► Groq LLM (llama-3.3-70b) + Tavily Search     │
-│  POST /bias       ──► Groq LLM (llama-3.3-70b)                     │
-└─────────────────────────────────────────────────────────────────────┘
+```text
+Chrome tab with audio
+  -> background.js service worker
+     -> opens Chrome side panel
+     -> gets tabCapture stream ID
+     -> creates offscreen document
+  -> offscreen.js
+     -> captures tab audio
+     -> routes audio back to speakers
+     -> sends overlapping audio chunks to background.js
+  -> background.js
+     -> POST /transcribe
+     -> buffers transcript text
+     -> POST /factcheck and /bias every 20 seconds
+  -> sidebar
+     -> renders transcript, fact-check cards, and bias meter
+
+Express backend on Railway or localhost
+  -> /health for deployment and extension readiness checks
+  -> /transcribe proxies audio to Groq Whisper
+  -> /factcheck extracts claims, searches Tavily, and asks Groq for verdicts
+  -> /bias asks Groq for framing and tone analysis
 ```
 
 ## Component Responsibilities
@@ -59,113 +32,51 @@
 
 | File | Role |
 |------|------|
-| `manifest.json` | MV3 config — permissions, service worker, side panel, offscreen |
-| `background.js` | Service worker — session lifecycle, rolling buffer, overlap dedup, backend fetch, broadcast |
-| `content.js` | Content script — placeholder for future in-page claim highlighting |
+| `manifest.json` | MV3 config, permissions, service worker, side panel, offscreen access |
+| `background.js` | Session lifecycle, backend health checks, rolling transcript buffer, overlap deduplication, backend fetches, side-panel broadcasts |
 | `offscreen.html` | Offscreen document shell |
-| `offscreen.js` | Audio capture (getUserMedia), passthrough (AudioContext), ring buffer chunking |
+| `offscreen.js` | Audio capture, audio passthrough, ring-buffer chunking, base64 audio messages |
 | `sidebar/sidebar.html` | Side panel UI shell |
-| `sidebar/sidebar.css` | Dark-mode styles — verdict colors, bias meter, emotion bar |
-| `sidebar/sidebar.js` | Renders transcript, fact-check cards, bias meter from runtime messages |
+| `sidebar/sidebar.css` | Dark UI styles, verdict colors, bias meter, emotion bar |
+| `sidebar/sidebar.js` | Renders transcript chunks, fact-check cards, bias meter, status, and errors |
 
 ### Backend
 
 | File | Role |
 |------|------|
-| `server.js` | Express app — CORS, middleware, route mounting, health check |
-| `routes/transcribe.js` | Proxies audio blobs to Groq Whisper, returns `{ text, language }` |
-| `routes/factcheck.js` | Claim extraction → Tavily search → Groq verdict, with 1-hour claim cache |
-| `routes/bias.js` | Language tone/framing analysis via Groq LLM |
+| `server.js` | Express app, CORS, proxy trust, rate limits, security headers, route mounting, health check |
+| `routes/transcribe.js` | Accepts audio uploads, proxies to Groq Whisper, returns `{ text, language }` |
+| `routes/factcheck.js` | Extracts claims, searches Tavily, asks Groq for grounded verdicts, caches claims for 1 hour |
+| `routes/bias.js` | Analyzes political framing and emotional charge with Groq |
+| `railway.toml` | Railway build, start command, health check, restart policy |
 
 ## Data Flow
 
-1. User clicks the FactLens icon → `background.js` calls `chrome.sidePanel.open()` synchronously
-2. `chrome.tabCapture.getMediaStreamId()` returns a stream ID (MV3-compatible)
-3. An offscreen document is created; the stream ID is passed to `offscreen.js`
-4. `offscreen.js` calls `getUserMedia` with the stream ID to get the `MediaStream`
-5. Audio is routed through an `AudioContext` → speakers (passthrough, user still hears the tab)
-6. `MediaRecorder` fires `ondataavailable` every 500ms; chunks accumulate in a 12-slot ring buffer
-7. Every 6 new chunks (~3s), the full ring buffer (6s of audio) is base64-encoded and sent to `background.js`
-8. `background.js` decodes the base64, POSTs the blob to `POST /transcribe`
-9. Groq Whisper returns `{ text, language }` — language is auto-detected
-10. Overlap deduplication strips repeated words from the previous chunk boundary
-11. New transcript text is broadcast to the side panel immediately and added to the rolling buffer
-12. Every 20 seconds, `runAnalysis()` fires: sends the rolling buffer to `/factcheck` and `/bias` in parallel
-13. Fact-check results (verdict, confidence, reasoning, sources) are broadcast to the side panel
-14. Bias results (lean score, emotion score, framing label) update the meter
+1. User clicks the FactLens toolbar icon.
+2. `background.js` opens the side panel and checks whether the backend is reachable.
+3. `background.js` gets a `tabCapture` stream ID and starts the offscreen document.
+4. `offscreen.js` captures tab audio, keeps audio audible through an `AudioContext`, and builds overlapping chunks.
+5. `background.js` posts audio chunks to `POST /transcribe`.
+6. The backend sends audio to Groq Whisper and returns transcript text plus detected language.
+7. `background.js` deduplicates overlap, broadcasts transcript text, and stores recent words in a rolling buffer.
+8. Every 20 seconds, `background.js` sends the buffer to `POST /factcheck` and `POST /bias`.
+9. The side panel renders transcript, verdict cards, source links, and bias indicators.
 
-## Audio Pipeline Detail
+## Runtime Targets
 
-```
-MediaRecorder (500ms timeslice)
-    │
-    ▼ ondataavailable
-Ring buffer [slot 0..11] — 12 × 500ms = 6 seconds total
-    │
-    ▼ every 6 new chunks (3 seconds)
-Blob = concat(ring[0..11])   ← always 6s, overlaps 3s with previous blob
-    │
-    ▼ base64 encode
-background.js → POST /transcribe
-    │
-    ▼ Groq Whisper
-{ text, language }
-    │
-    ▼ deduplicateOverlap(prev, next)
-New words only → sidebar + rolling buffer
-```
-
-## Message Types (background → side panel)
-
-| Type | Payload | Description |
-|------|---------|-------------|
-| `STATUS` | `'idle' \| 'listening' \| 'processing'` | Session state change |
-| `TRANSCRIPT` | `string` | New (deduplicated) transcript chunk |
-| `FACTCHECK` | `Array<{claim, verdict, confidence, reasoning, sources}>` | Fact-check results |
-| `BIAS` | `{lean_score, emotion_score, framing_label}` | Bias analysis result |
-| `ERROR` | `string` | Human-readable error to display in the panel |
-| `BACKEND_STATUS` | `'checking' \| 'warming' \| 'ready'` | Backend cold-start state for warming banner |
-
-Internal messages (background ↔ offscreen, silently ignored by sidebar):
-
-| Type | Direction | Description |
-|------|-----------|-------------|
-| `START_RECORDING` | background → offscreen | Begin capture with stream ID |
-| `STOP_RECORDING` | background → offscreen | Stop capture and release resources |
-| `AUDIO_CHUNK` | offscreen → background | Base64-encoded audio blob |
-| `GET_STATUS` | sidebar → background | Request current session state on panel load |
-
-## Fact-Check Pipeline
-
-```
-Rolling buffer (150 words) → POST /factcheck
-    │
-    ▼ Groq llama-3.3-70b (temperature 0.1)
-Extract up to 3 verifiable claims
-    │
-    ▼ For each claim:
-    ├─ Cache hit? → return instantly (1-hour TTL)
-    └─ Cache miss:
-        ├─ Tavily advanced search (5 results)
-        ├─ Groq verdict call (grounded in search results only)
-        └─ Cache result → return to sidebar
-```
-
-## API Keys
-
-All keys live in `backend/.env` — never in the extension. The extension only ever talks to `localhost:3001`.
-
-| Key | Service | Used for |
-|-----|---------|----------|
-| `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) | Whisper transcription + LLM fact-check + bias |
-| `TAVILY_API_KEY` | [app.tavily.com](https://app.tavily.com) | Web search for claim verification |
+| Target | URL / permission |
+|--------|------------------|
+| Railway backend | `https://*.up.railway.app/*` |
+| Local backend | `http://localhost:3001/*`, `http://127.0.0.1:3001/*` |
+| Chrome extension origins | Allowed by backend CORS through `chrome-extension://*` |
 
 ## Sprint Status
 
 | Sprint | Goal | Status |
 |--------|------|--------|
-| 1 | Scaffold, extension shell, sidebar UI, backend stubs | ✅ Done |
-| 2 | Real audio capture (offscreen doc), Groq Whisper, audio passthrough | ✅ Done |
-| 3 | Groq LLM fact-checking + Tavily, bias analysis, rolling buffer, claim cache, Spanish support | ✅ Done |
-| 4 | UI polish, stop button, timestamps, clear buttons, spinner, v1.1.0 | ✅ Done |
-| 5 | Railway deployment config, rate limiting, cold-start handling, onboarding screen, privacy policy | ✅ Done |
+| 1 | Scaffold, extension shell, sidebar UI, backend stubs | Done |
+| 2 | Real audio capture, Groq Whisper, audio passthrough | Done |
+| 3 | Groq LLM fact-checking, Tavily search, bias analysis, rolling buffer, claim cache, Spanish support | Done |
+| 4 | UI polish, stop button, timestamps, clear buttons, spinner, v1.1.0 | Done |
+| 5 | Railway deployment config, production backend hardening, rate limiting, privacy policy | Done after hardening pass |
+| 6 | Cold-start UI handling, faster retry feedback, compact onboarding | Planned |

@@ -6,39 +6,24 @@
 
   "permissions": [
     "tabCapture",
-    "activeTab",
-    "scripting",
     "storage",
     "sidePanel",
     "offscreen"
   ],
 
   "host_permissions": [
-    "https://*.up.railway.app/*"
+    "https://*.up.railway.app/*",
+    "http://localhost:3001/*",
+    "http://127.0.0.1:3001/*"
   ],
 
   "background": {
     "service_worker": "background.js"
   },
 
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ],
-
   "side_panel": {
     "default_path": "sidebar/sidebar.html"
   },
-
-  "web_accessible_resources": [
-    {
-      "resources": ["offscreen.html"],
-      "matches":   ["<all_urls>"]
-    }
-  ],
 
   "action": {
     "default_title": "FactLens",
