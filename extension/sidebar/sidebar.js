@@ -90,6 +90,7 @@
 
   function updateStatus(status) {
     statusDot.classList.remove('listening', 'processing');
+    document.body.classList.toggle('fl-session-active', status === 'listening' || status === 'processing');
 
     const labels = {
       idle:       'Idle',
