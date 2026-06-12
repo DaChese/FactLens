@@ -35,13 +35,19 @@
 
 html {
   height: 100%;
+  overflow: hidden;
 }
 
 body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
+  width: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font);
@@ -185,7 +191,8 @@ body {
 .fl-section--transcript {
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 .fl-section--factcheck {
@@ -236,7 +243,8 @@ body {
 
 /* ── Transcript Feed ──────────────────────────────────────────────────────── */
 .fl-transcript-feed {
-  height: 150px;
+  height: clamp(96px, 24vh, 150px);
+  min-height: 0;
   overflow-y: auto;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
