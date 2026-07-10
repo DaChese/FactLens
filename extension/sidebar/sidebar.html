@@ -10,69 +10,37 @@
 
   <!-- ── Header ─────────────────────────────────────────────────────────── -->
   <header class="fl-header">
-    <div class="fl-logo">
-      <span class="fl-logo-icon">🔍</span>
-      <span class="fl-logo-text">FactLens</span>
-    </div>
+    <span class="fl-logo-text">FactLens</span>
     <div class="fl-header-right">
       <div class="fl-status">
         <span class="fl-status-dot" id="fl-status-dot"></span>
         <span class="fl-status-label" id="fl-status-label">Idle</span>
       </div>
-      <button class="fl-stop-btn" id="fl-stop-btn" title="Stop listening" aria-label="Stop listening" hidden>
-        &#9632;
+      <button class="fl-btn" id="fl-check-btn" title="Re-check the current segment now" hidden>
+        Check now
+      </button>
+      <button class="fl-btn" id="fl-stop-btn" title="Stop listening" hidden>
+        Stop
+      </button>
+      <button class="fl-btn" id="fl-settings-btn" title="Open settings">
+        Settings
       </button>
     </div>
   </header>
 
-  <!-- ── Transcript Panel ───────────────────────────────────────────────── -->
-  <section class="fl-section fl-section--transcript">
+  <!-- ── Community Notes ────────────────────────────────────────────────── -->
+  <section class="fl-section fl-section--notes">
     <div class="fl-section-header">
-      <h2 class="fl-section-title">Live Transcript</h2>
-      <button class="fl-clear-btn" id="fl-clear-transcript" title="Clear transcript" aria-label="Clear transcript">
-        Clear
-      </button>
-    </div>
-    <div class="fl-transcript-feed" id="fl-transcript-feed">
-      <p class="fl-placeholder">Transcript will appear here once listening starts…</p>
-    </div>
-  </section>
-
-  <!-- ── Fact-Check Panel ───────────────────────────────────────────────── -->
-  <section class="fl-section fl-section--factcheck">
-    <div class="fl-section-header">
-      <h2 class="fl-section-title">Fact Checks</h2>
-      <button class="fl-clear-btn" id="fl-clear-factcheck" title="Clear fact checks" aria-label="Clear fact checks">
-        Clear
-      </button>
-    </div>
-    <div class="fl-factcheck-list" id="fl-factcheck-list">
-      <p class="fl-placeholder">Claims will be verified as they are detected…</p>
-    </div>
-  </section>
-
-  <!-- ── Bias Meter ─────────────────────────────────────────────────────── -->
-  <section class="fl-section">
-    <h2 class="fl-section-title">Bias Meter</h2>
-
-    <div class="fl-bias-labels">
-      <span>Left</span>
-      <span>Center</span>
-      <span>Right</span>
-    </div>
-
-    <div class="fl-bias-track" aria-label="Bias meter">
-      <div class="fl-bias-needle" id="fl-bias-needle"></div>
-    </div>
-
-    <p class="fl-bias-framing" id="fl-bias-framing">—</p>
-
-    <div class="fl-emotion-row">
-      <span class="fl-emotion-label">Emotional charge</span>
-      <div class="fl-emotion-track">
-        <div class="fl-emotion-fill" id="fl-emotion-fill"></div>
+      <h2 class="fl-section-title">Community Notes</h2>
+      <div class="fl-section-header-right">
+        <span class="fl-outlet-badge" id="fl-outlet-badge" hidden></span>
+        <button class="fl-btn fl-btn--small" id="fl-clear-notes" title="Clear notes">
+          Clear
+        </button>
       </div>
-      <span class="fl-emotion-value" id="fl-emotion-value">0%</span>
+    </div>
+    <div class="fl-notes-list" id="fl-notes-list">
+      <p class="fl-placeholder">Press Check now while something is playing and a note about the story will appear here.</p>
     </div>
   </section>
 

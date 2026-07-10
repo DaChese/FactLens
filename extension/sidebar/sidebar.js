@@ -1,5 +1,13 @@
 /**
- * sidebar.js — FactLens Side Panel UI Controller (Sprint 4)
+ * sidebar.js — FactLens Side Panel UI Controller (on-demand)
+ *
+ * Renders one unified "Community Note" per story — modeled on X/Twitter's
+ * Community Notes: neutral added context with clickable sources, not a
+ * verdict machine.
+ *
+ * Nothing is analyzed automatically. The viewer presses "Check now" to build
+ * a note (story + context from other outlets + coverage spread), and can then
+ * press "Check statements" on the note to fact-check specific claims.
  */
 
 (function () {
@@ -7,17 +15,52 @@
 
   // ─── DOM References ──────────────────────────────────────────────────────
 
-  const statusDot        = document.getElementById('fl-status-dot');
-  const statusLabel      = document.getElementById('fl-status-label');
-  const stopBtn          = document.getElementById('fl-stop-btn');
-  const transcriptFeed   = document.getElementById('fl-transcript-feed');
-  const factcheckList    = document.getElementById('fl-factcheck-list');
-  const biasNeedle       = document.getElementById('fl-bias-needle');
-  const biasFraming      = document.getElementById('fl-bias-framing');
-  const emotionFill      = document.getElementById('fl-emotion-fill');
-  const emotionValue     = document.getElementById('fl-emotion-value');
-  const clearTranscript  = document.getElementById('fl-clear-transcript');
-  const clearFactcheck   = document.getElementById('fl-clear-factcheck');
+  const statusDot    = document.getElementById('fl-status-dot');
+  const statusLabel  = document.getElementById('fl-status-label');
+  const stopBtn      = document.getElementById('fl-stop-btn');
+  const checkBtn     = document.getElementById('fl-check-btn');
+  const settingsBtn  = document.getElementById('fl-settings-btn');
+  const notesList    = document.getElementById('fl-notes-list');
+  const outletBadge  = document.getElementById('fl-outlet-badge');
+  const clearNotes   = document.getElementById('fl-clear-notes');
+
+  const PLACEHOLDER_HTML = '<p class="fl-placeholder">Press Check now while something is playing and a note about the story will appear here.</p>';
+
+  const BIAS_LABELS = {
+    'left':       'left',
+    'lean-left':  'lean left',
+    'center':     'center',
+    'lean-right': 'lean right',
+    'right':      'right',
+  };
+
+  // Neutral labels — context framing, not a "FACT CHECK" verdict machine
+  const VERDICT_LABELS = {
+    'True':       'Confirmed',
+    'False':      'Disputed',
+    'Unverified': 'Unclear',
+  };
+
+  const MAX_ARCHIVED_NOTES = 4;
+
+  // ─── Note State ──────────────────────────────────────────────────────────
+
+  function emptyNote() {
+    return {
+      story:          null,
+      confidence:     null,
+      matchedOn:      [],
+      lowConfidence:  false,
+      articles:       [],
+      coverage:       null,
+      missingContext: [],
+      claims:         [],
+      claimsChecked:  false, // "Check statements" has been run for this note
+    };
+  }
+
+  let currentNote       = emptyNote();
+  let coverageAvailable = true; // false once the backend reports no NewsAPI key
 
   // ─── Message Listener ────────────────────────────────────────────────────
 
@@ -26,36 +69,49 @@
     if (!type) return;
 
     switch (type) {
-      case 'STATUS':        updateStatus(payload);      break;
-      case 'TRANSCRIPT':    appendTranscript(payload);  break;
-      case 'FACTCHECK':     renderFactChecks(payload);  break;
-      case 'BIAS':          updateBiasMeter(payload);   break;
-      case 'ERROR':         showError(payload);         break;
+      case 'STATUS':      updateStatus(payload);  break;
+      case 'COVERAGE':    applyCoverage(payload); break;
+      case 'FACTCHECK':   applyClaims(payload);   break;
+      case 'NOTE_DONE':   resetCheckButton();     break;
+      case 'CLAIMS_DONE': resetClaimsButton();    break;
+      case 'ERROR':       showError(payload);     break;
+      case 'TRANSCRIPT':
       case 'START_RECORDING':
       case 'STOP_RECORDING':
+      case 'REQUEST_AUDIO':
       case 'AUDIO_CHUNK':
+      case 'CAPTION_TEXT':
+      case 'PAGE_SIGNALS':
         break;
       default:
         console.warn('[FactLens Sidebar] Unknown message type:', type);
     }
   });
 
-  // ─── Stop Button ─────────────────────────────────────────────────────────
+  // ─── Header Buttons ──────────────────────────────────────────────────────
 
   stopBtn.addEventListener('click', () => {
-    // Send a stop request to the background service worker
     chrome.runtime.sendMessage({ type: 'STOP_SESSION' }).catch(() => {});
   });
 
-  // ─── Clear Buttons ───────────────────────────────────────────────────────
-
-  clearTranscript.addEventListener('click', () => {
-    transcriptFeed.innerHTML = '<p class="fl-placeholder">Transcript will appear here once listening starts…</p>';
+  checkBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'ANALYZE_NOW' }).catch(() => {});
+    checkBtn.disabled = true;
+    checkBtn.textContent = 'Building note…';
   });
 
-  clearFactcheck.addEventListener('click', () => {
-    factcheckList.innerHTML = '<p class="fl-placeholder">Claims will be verified as they are detected…</p>';
-    renderedClaims.clear();
+  function resetCheckButton() {
+    checkBtn.disabled = false;
+    checkBtn.textContent = 'Check now';
+  }
+
+  settingsBtn.addEventListener('click', () => {
+    chrome.runtime.openOptionsPage();
+  });
+
+  clearNotes.addEventListener('click', () => {
+    currentNote = emptyNote();
+    notesList.innerHTML = PLACEHOLDER_HTML;
   });
 
   // ─── Status ──────────────────────────────────────────────────────────────
@@ -66,7 +122,7 @@
     const labels = {
       idle:       'Idle',
       listening:  'Listening',
-      processing: 'Processing',
+      processing: 'Working',
     };
 
     statusLabel.textContent = labels[status] ?? status;
@@ -74,153 +130,291 @@
     if (status === 'listening' || status === 'processing') {
       statusDot.classList.add(status);
       stopBtn.hidden = false;
-      // Show spinner in transcript feed if it's still showing the placeholder
-      showSpinnerIfEmpty();
+      checkBtn.hidden = false;
+      showReadyHintIfEmpty();
     } else {
       stopBtn.hidden = true;
-      removeSpinner();
+      checkBtn.hidden = true;
+      resetCheckButton();
+      removeReadyHint();
     }
   }
 
-  // ─── Spinner ─────────────────────────────────────────────────────────────
-
-  function showSpinnerIfEmpty() {
-    if (transcriptFeed.querySelector('.fl-transcript-chunk')) return;
-    if (transcriptFeed.querySelector('.fl-spinner')) return;
-    const placeholder = transcriptFeed.querySelector('.fl-placeholder');
+  function showReadyHintIfEmpty() {
+    if (notesList.querySelector('.fl-note')) return;
+    if (notesList.querySelector('.fl-ready-hint')) return;
+    const placeholder = notesList.querySelector('.fl-placeholder');
     if (placeholder) placeholder.remove();
-    const spinner = document.createElement('div');
-    spinner.className = 'fl-spinner';
-    spinner.id = 'fl-spinner';
-    spinner.textContent = 'Listening for audio…';
-    transcriptFeed.appendChild(spinner);
+    const hint = document.createElement('p');
+    hint.className = 'fl-ready-hint';
+    hint.textContent = 'Collecting audio and captions locally — press Check now whenever you want a note about what’s being discussed.';
+    notesList.appendChild(hint);
   }
 
-  function removeSpinner() {
-    const spinner = document.getElementById('fl-spinner');
-    if (spinner) spinner.remove();
+  function removeReadyHint() {
+    const hint = notesList.querySelector('.fl-ready-hint');
+    if (hint) hint.remove();
   }
 
-  // ─── Transcript ──────────────────────────────────────────────────────────
+  // ─── Applying Results to the Note ────────────────────────────────────────
 
-  function appendTranscript(text) {
-    removeSpinner();
-    const placeholder = transcriptFeed.querySelector('.fl-placeholder');
+  function applyCoverage(payload) {
+    if (!payload) return;
+
+    if (payload.outlet_bias) {
+      outletBadge.hidden = false;
+      outletBadge.textContent =
+        `Watching: ${payload.outlet_bias.name} (${BIAS_LABELS[payload.outlet_bias.rating] ?? payload.outlet_bias.rating})`;
+    }
+
+    if (payload.available === false) {
+      coverageAvailable = false;
+      renderNotes();
+      return;
+    }
+    coverageAvailable = true;
+
+    if (!payload.story) {
+      showError('No clear news story identified in this segment yet.');
+      return;
+    }
+
+    // New story? Freeze the current note into history and start fresh.
+    if (currentNote.story && payload.story !== currentNote.story) {
+      archiveCurrentNote();
+      currentNote = emptyNote();
+    }
+
+    currentNote.story          = payload.story;
+    currentNote.confidence     = payload.confidence ?? null;
+    currentNote.matchedOn      = payload.matched_on ?? [];
+    currentNote.lowConfidence  = !!payload.low_confidence;
+    currentNote.articles       = payload.articles ?? [];
+    currentNote.coverage       = payload.coverage ?? null;
+    currentNote.missingContext = payload.missing_context ?? [];
+    renderNotes();
+  }
+
+  function applyClaims(results) {
+    currentNote.claimsChecked = true;
+    if (Array.isArray(results)) {
+      for (const item of results) {
+        if (!item?.claim) continue;
+        const key = item.claim.trim().toLowerCase();
+        if (currentNote.claims.some(c => c.claim.trim().toLowerCase() === key)) continue;
+        currentNote.claims.push(item);
+      }
+    }
+    renderNotes();
+  }
+
+  function archiveCurrentNote() {
+    const liveCard = notesList.querySelector('.fl-note--live');
+    if (!liveCard) return;
+    liveCard.classList.remove('fl-note--live');
+    liveCard.classList.add('fl-note--archived');
+    // Frozen notes lose their action button
+    liveCard.querySelector('.fl-note-actions')?.remove();
+
+    const archived = notesList.querySelectorAll('.fl-note--archived');
+    if (archived.length > MAX_ARCHIVED_NOTES) {
+      archived[archived.length - 1].remove();
+    }
+  }
+
+  // ─── Rendering ───────────────────────────────────────────────────────────
+
+  function renderNotes() {
+    removeReadyHint();
+    const placeholder = notesList.querySelector('.fl-placeholder');
     if (placeholder) placeholder.remove();
 
-    const chunk = document.createElement('div');
-    chunk.className = 'fl-transcript-chunk';
-
-    // Timestamp
-    const time = document.createElement('span');
-    time.className = 'fl-transcript-time';
-    time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    const text_node = document.createElement('span');
-    text_node.textContent = text;
-
-    chunk.appendChild(time);
-    chunk.appendChild(text_node);
-    transcriptFeed.appendChild(chunk);
-    transcriptFeed.scrollTop = transcriptFeed.scrollHeight;
+    let liveCard = notesList.querySelector('.fl-note--live');
+    if (!liveCard) {
+      liveCard = document.createElement('article');
+      liveCard.className = 'fl-note fl-note--live';
+      notesList.prepend(liveCard);
+    }
+    liveCard.replaceChildren(...buildNoteContent(currentNote));
   }
 
-  // ─── Fact-Check Cards ────────────────────────────────────────────────────
+  function buildNoteContent(note) {
+    const parts = [];
 
-  const renderedClaims = new Set();
-  const MAX_CARDS = 20;
+    // ── Story headline + match evidence ──
+    const heading = document.createElement('h3');
+    heading.className = 'fl-note-story';
+    heading.textContent = note.story ?? 'Current segment';
+    parts.push(heading);
 
-  function renderFactChecks(results) {
-    if (!Array.isArray(results) || results.length === 0) return;
+    const meta = document.createElement('p');
+    meta.className = 'fl-note-meta';
+    if (note.lowConfidence) {
+      meta.textContent = 'Low-confidence story match — coverage withheld until independent signals agree.';
+    } else if (note.matchedOn.length > 0) {
+      const conf = note.confidence ? `${note.confidence} confidence` : '';
+      meta.textContent = `Matched on: ${note.matchedOn.join(', ')}${conf ? ` · ${conf}` : ''}`;
+    } else if (!coverageAvailable) {
+      meta.textContent = 'Coverage comparison disabled — add a NewsAPI key in Settings to enable it.';
+    }
+    parts.push(meta);
 
-    const placeholder = factcheckList.querySelector('.fl-placeholder');
-    if (placeholder) placeholder.remove();
+    // ── Context other outlets reported (the heart of the note) ──
+    if (note.missingContext.length > 0) {
+      parts.push(subheading('Readers on other outlets also saw'));
+      const list = document.createElement('ul');
+      list.className = 'fl-note-context';
+      note.missingContext.forEach((item) => {
+        // Items are { text, outlet, url }; tolerate plain strings
+        const text = typeof item === 'string' ? item : item?.text;
+        if (!text) return;
+        const li = document.createElement('li');
+        li.appendChild(document.createTextNode(text + ' '));
+        if (item?.url && item?.outlet) {
+          const src = document.createElement('a');
+          src.className = 'fl-context-source';
+          src.href = item.url;
+          src.target = '_blank';
+          src.rel = 'noopener noreferrer';
+          src.textContent = `(${item.outlet})`;
+          li.appendChild(src);
+        }
+        list.appendChild(li);
+      });
+      parts.push(list);
+    }
 
-    results.forEach((item) => {
-      const key = item.claim.trim().toLowerCase();
-      if (renderedClaims.has(key)) return;
-      renderedClaims.add(key);
+    // ── Coverage spread ──
+    if (note.articles.length > 0) {
+      parts.push(subheading('Who else is covering this'));
 
-      factcheckList.prepend(buildClaimCard(item));
+      const tally = note.coverage;
+      if (tally) {
+        const leftish  = (tally['left'] ?? 0) + (tally['lean-left'] ?? 0);
+        const rightish = (tally['right'] ?? 0) + (tally['lean-right'] ?? 0);
+        const center   = tally['center'] ?? 0;
+        const summary  = document.createElement('p');
+        summary.className = 'fl-note-summary';
+        summary.textContent =
+          `${note.articles.length} other outlet${note.articles.length === 1 ? '' : 's'} — ` +
+          `${leftish} left-leaning, ${center} center, ${rightish} right-leaning.`;
+        parts.push(summary);
+      }
 
-      const cards = factcheckList.querySelectorAll('.fl-claim-card');
-      if (cards.length > MAX_CARDS) cards[cards.length - 1].remove();
-    });
-  }
-
-  function buildClaimCard(item) {
-    const { claim, verdict, confidence = 0, sources = [] } = item;
-
-    const card = document.createElement('div');
-    card.className = `fl-claim-card ${verdict.toLowerCase()}`;
-
-    // Header
-    const header = document.createElement('div');
-    header.className = 'fl-claim-header';
-
-    const claimText = document.createElement('span');
-    claimText.className = 'fl-claim-text';
-    claimText.textContent = claim;
-
-    const badge = document.createElement('span');
-    badge.className = `fl-verdict ${verdict.toLowerCase()}`;
-    badge.textContent = verdict;
-
-    header.appendChild(claimText);
-    header.appendChild(badge);
-
-    // Confidence bar
-    const confBar = document.createElement('div');
-    confBar.className = 'fl-confidence-bar';
-    const confFill = document.createElement('div');
-    confFill.className = 'fl-confidence-fill';
-    confFill.style.width = `${Math.round(confidence * 100)}%`;
-    confBar.appendChild(confFill);
-
-    // Source links
-    const sourcesEl = document.createElement('div');
-    sourcesEl.className = 'fl-sources';
-    sources.forEach((url) => {
-      try {
-        const domain = new URL(url).hostname.replace(/^www\./, '');
+      const outlets = document.createElement('p');
+      outlets.className = 'fl-note-outlets';
+      note.articles.forEach((a, i) => {
         const link = document.createElement('a');
-        link.className = 'fl-source-link';
-        link.href = url;
+        link.href = a.url;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-        link.textContent = domain;
-        link.title = url;
-        sourcesEl.appendChild(link);
-      } catch { /* skip malformed URLs */ }
-    });
-
-    card.appendChild(header);
-    card.appendChild(confBar);
-
-    if (item.reasoning) {
-      const reasoning = document.createElement('p');
-      reasoning.className = 'fl-claim-reasoning';
-      reasoning.textContent = item.reasoning;
-      card.appendChild(reasoning);
+        link.title = a.title;
+        link.textContent = a.bias ? `${a.outlet} (${BIAS_LABELS[a.bias] ?? a.bias})` : a.outlet;
+        outlets.appendChild(link);
+        if (i < note.articles.length - 1) outlets.appendChild(document.createTextNode(' · '));
+      });
+      parts.push(outlets);
     }
 
-    if (sources.length > 0) card.appendChild(sourcesEl);
+    // ── Checked statements ──
+    if (note.claims.length > 0) {
+      parts.push(subheading('Statements checked against the web'));
+      const list = document.createElement('ul');
+      list.className = 'fl-note-claims';
+      note.claims.forEach((item) => {
+        list.appendChild(buildClaimItem(item));
+      });
+      parts.push(list);
+    } else if (note.claimsChecked) {
+      const none = document.createElement('p');
+      none.className = 'fl-note-summary';
+      none.textContent = 'No specific checkable statements were found in this segment.';
+      parts.push(none);
+    }
 
-    return card;
+    // ── Action: check statements (one /factcheck call, on request) ──
+    if (note.story && !note.claimsChecked) {
+      const actions = document.createElement('div');
+      actions.className = 'fl-note-actions';
+      const btn = document.createElement('button');
+      btn.className = 'fl-btn fl-btn--small';
+      btn.id = 'fl-claims-btn';
+      btn.textContent = 'Check statements in this segment';
+      btn.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ type: 'CHECK_CLAIMS' }).catch(() => {});
+        btn.disabled = true;
+        btn.textContent = 'Checking statements…';
+      });
+      actions.appendChild(btn);
+      parts.push(actions);
+    }
+
+    return parts;
   }
 
-  // ─── Bias Meter ──────────────────────────────────────────────────────────
+  function resetClaimsButton() {
+    const btn = document.getElementById('fl-claims-btn');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Check statements in this segment';
+    }
+  }
 
-  function updateBiasMeter({ lean_score = 0, emotion_score = 0, framing_label = '—' }) {
-    const lean    = Math.max(-1, Math.min(1, Number(lean_score)    || 0));
-    const emotion = Math.max(0,  Math.min(1, Number(emotion_score) || 0));
+  function buildClaimItem(item) {
+    const { claim, verdict = 'Unverified', reasoning, sources = [] } = item;
 
-    biasNeedle.style.left = `${(((lean + 1) / 2) * 100).toFixed(1)}%`;
-    biasFraming.textContent = framing_label || '—';
+    const li = document.createElement('li');
+    li.className = 'fl-claim';
 
-    const emotionPct = Math.round(emotion * 100);
-    emotionFill.style.width = `${emotionPct}%`;
-    emotionValue.textContent = `${emotionPct}%`;
+    const line = document.createElement('p');
+    line.className = 'fl-claim-line';
+
+    const tag = document.createElement('span');
+    tag.className = 'fl-claim-tag';
+    tag.textContent = VERDICT_LABELS[verdict] ?? 'Unclear';
+
+    const text = document.createElement('span');
+    text.textContent = ` ${claim}`;
+
+    line.appendChild(tag);
+    line.appendChild(text);
+    li.appendChild(line);
+
+    if (reasoning) {
+      const why = document.createElement('p');
+      why.className = 'fl-claim-reasoning';
+      why.textContent = reasoning;
+      li.appendChild(why);
+    }
+
+    if (sources.length > 0) {
+      const srcs = document.createElement('p');
+      srcs.className = 'fl-claim-sources';
+      srcs.appendChild(document.createTextNode('Sources: '));
+      sources.forEach((url, i) => {
+        try {
+          const domain = new URL(url).hostname.replace(/^www\./, '');
+          const link = document.createElement('a');
+          link.href = url;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = domain;
+          link.title = url;
+          srcs.appendChild(link);
+          if (i < sources.length - 1) srcs.appendChild(document.createTextNode(', '));
+        } catch { /* skip malformed URLs */ }
+      });
+      li.appendChild(srcs);
+    }
+
+    return li;
+  }
+
+  function subheading(text) {
+    const h = document.createElement('h4');
+    h.className = 'fl-note-subheading';
+    h.textContent = text;
+    return h;
   }
 
   // ─── Error Banner ─────────────────────────────────────────────────────────

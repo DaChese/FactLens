@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FactLens Settings</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+
+  <header class="fl-header">
+    <h1>FactLens Settings</h1>
+    <button type="button" class="fl-btn" id="fl-back-btn" title="Close settings and go back">Back</button>
+  </header>
+
+  <main>
+    <form id="fl-settings-form">
+
+      <section class="fl-field-group">
+        <label for="fl-backend-url">Backend URL</label>
+        <p class="fl-hint">Where the FactLens Express backend is running. Leave as default for local development — pointing this at a different host also requires adding that host to <span class="fl-mono">host_permissions</span> in manifest.json and reloading the extension.</p>
+        <input type="text" id="fl-backend-url" placeholder="http://localhost:3001" autocomplete="off" />
+      </section>
+
+      <section class="fl-field-group">
+        <label for="fl-groq-key">Groq API Key</label>
+        <p class="fl-hint">Used for transcription (Whisper) and analysis. Required. Get one free at <span class="fl-mono">console.groq.com</span>.</p>
+        <input type="password" id="fl-groq-key" placeholder="gsk_..." autocomplete="off" />
+      </section>
+
+      <section class="fl-field-group">
+        <label for="fl-tavily-key">Tavily API Key</label>
+        <p class="fl-hint">Used for web search when checking statements. Required. Get one free at <span class="fl-mono">app.tavily.com</span>.</p>
+        <input type="password" id="fl-tavily-key" placeholder="tvly-..." autocomplete="off" />
+      </section>
+
+      <section class="fl-field-group">
+        <label for="fl-newsapi-key">
+          NewsAPI Key
+          <span class="fl-optional-badge">Optional</span>
+        </label>
+        <p class="fl-hint">Enables the coverage comparison inside Community Notes — who else is covering the story and what they added. Get one free at <span class="fl-mono">newsapi.org</span>.</p>
+        <input type="password" id="fl-newsapi-key" placeholder="(leave blank to disable coverage comparison)" autocomplete="off" />
+      </section>
+
+      <div class="fl-actions">
+        <button type="submit" class="fl-btn fl-btn--primary">Save</button>
+        <button type="button" class="fl-btn" id="fl-test-btn">Test connection</button>
+      </div>
+
+      <p class="fl-status" id="fl-status"></p>
+    </form>
+
+    <section class="fl-api-status">
+      <div class="fl-api-status-header">
+        <h2>API Status</h2>
+        <button type="button" class="fl-btn" id="fl-status-refresh">Refresh</button>
+      </div>
+      <p class="fl-hint">Which providers are responding, erroring, or rate-limited — call counts are since the backend last started.</p>
+      <div id="fl-api-status-body">
+        <p class="fl-hint">Press Refresh to check.</p>
+      </div>
+    </section>
+
+    <p class="fl-note">
+      Keys are stored locally in this browser profile (<span class="fl-mono">chrome.storage.local</span>) and sent to
+      your own backend as request headers — they're never sent anywhere else. If a key is left blank here, the backend
+      falls back to whatever is in its own <span class="fl-mono">.env</span> file.
+    </p>
+  </main>
+
+  <script src="options.js"></script>
+</body>
+</html>

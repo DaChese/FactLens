@@ -12,6 +12,8 @@
 
 import { Router } from 'express';
 import multer from 'multer';
+import { resolveKey } from '../lib/keys.js';
+import { recordSuccess, recordFailure } from '../lib/apiStatus.js';
 
 const router = Router();
 
@@ -37,6 +39,11 @@ const ALLOWED_MIME_TYPES = [
 
 router.post('/', upload.single('audio'), async (req, res, next) => {
   try {
+    const groqKey = resolveKey(req, 'X-Groq-Key', 'GROQ_API_KEY');
+    if (!groqKey) {
+      return res.status(400).json({ error: 'No Groq API key configured. Set one in the extension\'s Settings page or backend/.env.' });
+    }
+
     if (!req.file) {
       return res.status(400).json({
         error: 'No audio file provided. Send multipart/form-data with field "audio".',
@@ -75,14 +82,18 @@ router.post('/', upload.single('audio'), async (req, res, next) => {
 
     const response = await fetch(WHISPER_URL, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+      headers: { Authorization: `Bearer ${groqKey}` },
       body: formData,
     });
 
     if (!response.ok) {
       const errBody = await response.json().catch(() => ({ error: { message: response.statusText } }));
-      throw new Error(errBody?.error?.message ?? `Whisper API error ${response.status}`);
+      const err = new Error(errBody?.error?.message ?? `Whisper API error ${response.status}`);
+      err.status = response.status;
+      recordFailure('groq', err);
+      throw err;
     }
+    recordSuccess('groq');
 
     const data     = await response.json();
     const text     = data.text?.trim() ?? '';

@@ -1,0 +1,211 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   FactLens Settings Page — Monochrome Newsprint UI
+   Black and white only. Times New Roman. No emojis.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --paper:      #ffffff;
+  --ink:        #000000;
+  --ink-soft:   #333333;
+  --ink-muted:  #666666;
+  --rule-light: #cccccc;
+  --wash:       #f4f4f4;
+  --font:       'Times New Roman', Times, serif;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+main {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+}
+
+.fl-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 3px double var(--ink);
+}
+
+.fl-header h1 {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.fl-field-group {
+  margin-bottom: 24px;
+}
+
+.fl-field-group label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.fl-optional-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border: 1px solid var(--ink);
+  padding: 0 6px;
+}
+
+.fl-hint {
+  font-size: 13px;
+  color: var(--ink-muted);
+  margin-bottom: 8px;
+}
+
+.fl-mono {
+  font-family: 'Courier New', monospace;
+  font-size: 0.92em;
+}
+
+input[type="text"],
+input[type="password"] {
+  width: 100%;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  padding: 9px 12px;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus {
+  outline: 2px solid var(--ink);
+  outline-offset: -1px;
+}
+
+.fl-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.fl-btn {
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  padding: 8px 18px;
+  font-size: 14px;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fl-btn:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.fl-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.fl-btn--primary {
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 700;
+}
+
+.fl-btn--primary:hover:not(:disabled) {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.fl-status {
+  margin-top: 12px;
+  font-size: 13px;
+  min-height: 18px;
+}
+
+.fl-status.success { font-style: italic; }
+.fl-status.error   { font-weight: 700; }
+
+/* ── API Status ───────────────────────────────────────────────────────────── */
+.fl-api-status {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule-light);
+}
+
+.fl-api-status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.fl-api-status-header h2 {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.fl-api-status-header .fl-btn {
+  padding: 3px 12px;
+  font-size: 12px;
+}
+
+.fl-api-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  padding: 8px 0;
+  border-bottom: 1px dotted var(--rule-light);
+  font-size: 13px;
+}
+
+.fl-api-name {
+  font-weight: 700;
+}
+
+.fl-api-state {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  border: 1px solid var(--ink);
+  padding: 0 6px;
+  align-self: start;
+  justify-self: end;
+}
+
+.fl-api-row--bad .fl-api-state {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.fl-api-detail {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.fl-note {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule-light);
+  font-size: 13px;
+  color: var(--ink-muted);
+}

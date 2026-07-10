@@ -5,24 +5,20 @@
  * Has access to getUserMedia and MediaRecorder — things the service worker
  * cannot use in MV3.
  *
- * Audio pipeline:
+ * Audio pipeline (on-demand — nothing is sent anywhere on a timer):
  *  - MediaRecorder fires ondataavailable every TIMESLICE_MS (500ms)
- *  - Raw data chunks are kept in a ring buffer (RING_SIZE slots)
- *  - Every SEND_EVERY slots, we assemble the full ring buffer into a blob
- *    and send it for transcription
- *  - Because the ring buffer always contains the last N seconds of audio,
- *    each blob overlaps with the previous one — no words get dropped at
- *    chunk boundaries
- *
- * Example with TIMESLICE_MS=500, RING_SIZE=12 (6s window), SEND_EVERY=6:
- *   t=0s:  ring=[0..5]   → send 6s blob
- *   t=3s:  ring=[6..11]  → send 6s blob (shares 3s with previous)
- *   t=6s:  ring=[12..17] → send 6s blob (shares 3s with previous)
+ *  - Raw data chunks are kept in a rolling ring buffer holding the last
+ *    RING_SIZE slots (~90 seconds of audio)
+ *  - Recording costs nothing — audio only leaves this document when the
+ *    service worker sends REQUEST_AUDIO (the viewer pressed "Check now"),
+ *    at which point the whole ring is assembled into ONE blob and sent
+ *    for a single transcription call
  *
  * Message protocol with background.js (via chrome.runtime.onMessage):
  *  Incoming:
  *   { type: 'START_RECORDING', streamId: string, tabId: number }
  *   { type: 'STOP_RECORDING' }
+ *   { type: 'REQUEST_AUDIO' }   ← assemble + send the current ring buffer
  *  Outgoing:
  *   { type: 'AUDIO_CHUNK', payload: string (base64), mimeType: string, tabId: number }
  *   { type: 'ERROR',       payload: string, tabId: number }
@@ -33,14 +29,9 @@
 const TIMESLICE_MS = 500;
 
 // How many timeslice chunks to keep in the ring buffer.
-// RING_SIZE * TIMESLICE_MS = total audio window sent to Whisper.
-// 12 * 500ms = 6 seconds — enough context for accurate transcription.
-const RING_SIZE = 12;
-
-// Send a blob every N new timeslice chunks.
-// SEND_EVERY * TIMESLICE_MS = how often a new transcript arrives.
-// 6 * 500ms = every 3 seconds — feels live, with 3s of overlap from previous blob.
-const SEND_EVERY = 6;
+// RING_SIZE * TIMESLICE_MS = the audio window sent to Whisper on request.
+// 180 * 500ms = the last 90 seconds — enough context for a full note.
+const RING_SIZE = 180;
 
 let mediaRecorder = null;
 let audioContext  = null;
@@ -52,8 +43,7 @@ let currentTabId  = null;
 let headerChunk = null;
 
 // Ring buffer of raw Blob chunks from MediaRecorder (audio data only, no header)
-let ringBuffer  = [];
-let chunksSince = 0;
+let ringBuffer = [];
 
 // ─── Message Handler ─────────────────────────────────────────────────────────
 
@@ -65,8 +55,24 @@ chrome.runtime.onMessage.addListener((message) => {
     case 'STOP_RECORDING':
       stopRecording();
       break;
+    case 'REQUEST_AUDIO':
+      sendBufferedAudio();
+      break;
   }
 });
+
+/**
+ * Assemble the current ring buffer into one blob and send it for
+ * transcription. Called only when the viewer presses "Check now".
+ */
+function sendBufferedAudio() {
+  if (!mediaRecorder || !headerChunk || ringBuffer.length === 0) {
+    sendToBackground({ type: 'ERROR', payload: 'No audio captured yet — wait a few seconds and try again.', tabId: currentTabId });
+    return;
+  }
+  const blob = new Blob([headerChunk, ...ringBuffer], { type: mediaRecorder.mimeType });
+  sendAudioChunk(blob, currentTabId);
+}
 
 // ─── Recording ───────────────────────────────────────────────────────────────
 
@@ -78,7 +84,6 @@ chrome.runtime.onMessage.addListener((message) => {
 async function startRecording(streamId, tabId) {
   currentTabId = tabId;
   ringBuffer   = [];
-  chunksSince  = 0;
   headerChunk  = null;
 
   try {
@@ -116,20 +121,11 @@ async function startRecording(streamId, tabId) {
         return; // don't add the header to the ring buffer
       }
 
-      // Add audio data to ring buffer, drop oldest if full
+      // Add audio data to ring buffer, drop oldest if full.
+      // Nothing is sent from here — audio leaves only on REQUEST_AUDIO.
       ringBuffer.push(event.data);
       if (ringBuffer.length > RING_SIZE) {
         ringBuffer.shift();
-      }
-
-      chunksSince++;
-
-      // Every SEND_EVERY new chunks, assemble header + ring buffer into a blob
-      if (chunksSince >= SEND_EVERY && ringBuffer.length >= RING_SIZE) {
-        chunksSince = 0;
-        // Always prepend the header chunk so Groq can parse the WebM container
-        const blob = new Blob([headerChunk, ...ringBuffer], { type: mimeType });
-        sendAudioChunk(blob, tabId);
       }
     };
 
@@ -172,7 +168,6 @@ function stopRecording() {
   mediaRecorder = null;
   currentTabId  = null;
   ringBuffer    = [];
-  chunksSince   = 0;
   headerChunk   = null;
   console.log('[FactLens Offscreen] Recording stopped');
 }

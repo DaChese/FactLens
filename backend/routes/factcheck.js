@@ -22,21 +22,18 @@
  */
 
 import { Router } from 'express';
-import OpenAI from 'openai';
-import { tavily } from '@tavily/core';
+import { resolveKey, getGroqClient, getTavilyClient } from '../lib/keys.js';
+import { recordCall } from '../lib/apiStatus.js';
+import { spendBudget } from '../lib/rateLimit.js';
 
 const router = Router();
 
-const groq = new OpenAI({
-  apiKey:  process.env.GROQ_API_KEY,
-  baseURL: 'https://api.groq.com/openai/v1',
-});
-
-const tavilyClient = tavily({ apiKey: process.env.TAVILY_API_KEY });
-
 const MODEL      = 'llama-3.3-70b-versatile';
 const MAX_CHARS  = 4000;
-const MAX_CLAIMS = 3;
+// 2 claims per check, basic search depth — this endpoint only runs when the
+// viewer explicitly asks ("Check statements"), and Tavily credits are the
+// scarcest resource in the stack (~1,000/month free).
+const MAX_CLAIMS = 2;
 
 // ─── Claim Cache ─────────────────────────────────────────────────────────────
 // In-memory cache keyed by normalised claim text.
@@ -85,8 +82,9 @@ function setCached(claim, result) {
 // ─── System Prompts ──────────────────────────────────────────────────────────
 
 const EXTRACT_SYSTEM_PROMPT = `
-You are a strict fact-checking assistant. Given a transcript excerpt, extract up to 3
+You are a strict fact-checking assistant. Given a transcript excerpt, extract up to 2
 specific, verifiable factual claims that can be confirmed or denied with a web search.
+Pick only the most significant, checkable claims.
 
 A good claim:
 - States a concrete, checkable fact (a number, date, name, event, statistic, or law)
@@ -141,6 +139,14 @@ Output format:
 
 router.post('/', async (req, res, next) => {
   try {
+    const groqKey   = resolveKey(req, 'X-Groq-Key', 'GROQ_API_KEY');
+    const tavilyKey = resolveKey(req, 'X-Tavily-Key', 'TAVILY_API_KEY');
+    if (!groqKey)   return res.status(400).json({ error: 'No Groq API key configured. Set one in the extension\'s Settings page or backend/.env.' });
+    if (!tavilyKey) return res.status(400).json({ error: 'No Tavily API key configured. Set one in the extension\'s Settings page or backend/.env.' });
+
+    const groq        = getGroqClient(groqKey);
+    const tavilyClient = getTavilyClient(tavilyKey);
+
     const { transcript, language = 'english' } = req.body;
 
     if (!transcript || typeof transcript !== 'string' || transcript.trim().length === 0) {
@@ -151,7 +157,7 @@ router.post('/', async (req, res, next) => {
     const replyLanguage  = language === 'spanish' ? 'Spanish' : 'English';
 
     // ── Step 1: Extract verifiable claims ──
-    const extractionRes = await groq.chat.completions.create({
+    const extractionRes = await recordCall('groq', groq.chat.completions.create({
       model:       MODEL,
       max_tokens:  256,
       temperature: 0.1,
@@ -159,7 +165,7 @@ router.post('/', async (req, res, next) => {
         { role: 'system', content: EXTRACT_SYSTEM_PROMPT },
         { role: 'user',   content: `Transcript (language: ${replyLanguage}):\n${safeTranscript}` },
       ],
-    });
+    }));
 
     const rawExtraction = extractionRes.choices[0].message.content;
     const cleanedExtraction = rawExtraction
@@ -202,11 +208,14 @@ router.post('/', async (req, res, next) => {
       }
 
       try {
-        const searchResult = await tavilyClient.search(claim, {
+        // Throws 429 if the monthly Tavily budget is spent (cache hits skip this)
+        spendBudget('tavily');
+
+        const searchResult = await recordCall('tavily', tavilyClient.search(claim, {
           maxResults:    5,
-          searchDepth:   'advanced',
+          searchDepth:   'basic', // 1 Tavily credit instead of 2
           includeAnswer: true,
-        });
+        }));
 
         const tavilyAnswer = searchResult.answer
           ? `Tavily summary: ${searchResult.answer}\n\n`
@@ -227,7 +236,7 @@ router.post('/', async (req, res, next) => {
           continue;
         }
 
-        const verdictRes = await groq.chat.completions.create({
+        const verdictRes = await recordCall('groq', groq.chat.completions.create({
           model:       MODEL,
           max_tokens:  200,
           temperature: 0.1,
@@ -238,7 +247,7 @@ router.post('/', async (req, res, next) => {
               content: `Claim: "${claim}"\nRespond in ${replyLanguage}.\n\n${tavilyAnswer}Search results:\n${searchContext}`,
             },
           ],
-        });
+        }));
 
         const rawVerdict = verdictRes.choices[0].message.content;
         const cleanedVerdict = rawVerdict
@@ -273,9 +282,10 @@ router.post('/', async (req, res, next) => {
           claim,
           verdict:    'Unverified',
           confidence: 0.0,
-          reasoning:  'Could not retrieve search results.',
+          reasoning:  err.budget ? err.message : 'Could not retrieve search results.',
           sources:    [],
         });
+        if (err.budget) break; // budget is spent — no point trying the next claim
       }
     }
 

@@ -1,46 +1,86 @@
 /**
- * background.js — FactLens Service Worker
+ * background.js — FactLens Service Worker (on-demand architecture)
  *
- * In Chrome MV3, service workers cannot use MediaRecorder or access
- * MediaStream objects directly. The audio pipeline lives in an offscreen
- * document (offscreen.html / offscreen.js) instead.
+ * Nothing calls a paid API on a timer. While a session is active, the
+ * extension only *collects* for free:
+ *  - the offscreen document keeps a rolling ~90s audio ring buffer (local)
+ *  - the content script streams caption text and page signals (local)
  *
- * This service worker:
- *  1. Opens the Chrome Side Panel on icon click
- *  2. Gets a stream ID via chrome.tabCapture.getMediaStreamId()
- *  3. Creates an offscreen document and passes the stream ID to it
- *  4. Receives TRANSCRIPT / STATUS / ERROR messages from the offscreen doc
- *  5. Broadcasts those messages to the side panel
+ * APIs are hit only when the viewer acts:
+ *  - "Check now"        → ANALYZE_NOW  → build a Community Note:
+ *       transcript (captions if available, else ONE Whisper call)
+ *       + ONE /coverage call (story ID + other outlets + missing context)
+ *  - "Check statements" → CHECK_CLAIMS → ONE /factcheck call on the same
+ *       transcript (claim extraction + up to 2 web-searched verdicts)
+ *
+ * This mirrors the ATSC 3.0 target: on a real NextGen TV, captions arrive
+ * free with the broadcast (CEA-708) and the note is triggered by a remote
+ * button press — the browser prototype demonstrates the same architecture.
  *
  * Session state lives in chrome.storage.session (survives SW restarts).
  */
 
-const BACKEND_URL = 'http://localhost:3001';
+const DEFAULT_BACKEND_URL = 'http://localhost:3001';
 
-// Rolling transcript buffer — accumulates chunks across multiple Whisper responses.
-// Fact-check and bias analysis run against this buffer on a separate interval,
-// so analysis updates more frequently than the 8s audio chunk cycle.
+// ── Settings (backend URL + API keys) ──
+// Configured via the extension's Settings page (options/options.js) and
+// stored in chrome.storage.local. Cached here and invalidated on change.
+let cachedSettings = null;
+
+async function getSettings() {
+  if (cachedSettings) return cachedSettings;
+  const stored = await chrome.storage.local.get(['backendUrl', 'groqKey', 'tavilyKey', 'newsApiKey']);
+  cachedSettings = {
+    backendUrl: stored.backendUrl || DEFAULT_BACKEND_URL,
+    groqKey:    stored.groqKey    || '',
+    tavilyKey:  stored.tavilyKey  || '',
+    newsApiKey: stored.newsApiKey || '',
+  };
+  return cachedSettings;
+}
+
+chrome.storage.onChanged.addListener((_changes, area) => {
+  if (area === 'local') cachedSettings = null;
+});
+
+/**
+ * Build request headers carrying API key overrides for the backend.
+ * Keys left blank in Settings are omitted, so the backend falls back to its
+ * own .env for that key.
+ */
+function buildKeyHeaders(settings) {
+  const headers = {};
+  if (settings.groqKey)    headers['X-Groq-Key']    = settings.groqKey;
+  if (settings.tavilyKey)  headers['X-Tavily-Key']  = settings.tavilyKey;
+  if (settings.newsApiKey) headers['X-Newsapi-Key'] = settings.newsApiKey;
+  return headers;
+}
+
+// ── Per-tab collection state (all local, all free) ──
+
+// Caption-fed rolling word buffer — the preferred transcript source.
+// ~200 words ≈ the last 1-2 minutes of speech.
+const BUFFER_MAX_WORDS  = 200;
 const transcriptBuffers = {}; // tabId → string[]
 
-// How many words to keep in the rolling buffer for analysis context.
-// ~150 words ≈ 60–90 seconds of speech — enough context without being too stale.
-const BUFFER_MAX_WORDS = 150;
+// How long after the last caption snapshot we still trust the caption buffer
+// as the transcript source (instead of paying for a Whisper call).
+const CAPTION_USABLE_MS  = 75000;
+const lastCaptions       = {}; // tabId → last caption snapshot (for overlap dedup)
+const lastCaptionAt      = {}; // tabId → timestamp of last caption text
 
-// How often (ms) to run fact-check + bias analysis against the rolling buffer.
-// Independent of the audio chunk interval — runs every 20s so analysis feels live.
-const ANALYSIS_INTERVAL_MS = 20000;
+// Page title / headline / image metadata from the content script — used by
+// the backend to cross-check the identified story ("checks and balances").
+const pageSignals = {}; // tabId → { pageTitle, onScreenText }
 
-// Guard flag — prevents overlapping analysis cycles if Tavily/Groq is slow
-const analysisRunning = {}; // tabId → boolean
+// Detected language per tab (from Whisper) — captions don't provide one.
+const detectedLanguages = {}; // tabId → "english" | "spanish" | ...
 
-// Last transcript per tab — used to deduplicate overlapping Whisper results
-const lastTranscripts = {}; // tabId → last transcript string
+// ── Per-tab note-building state ──
 
-// Detected language per tab — passed to fact-check and bias routes
-const detectedLanguages = {}; // tabId → e.g. "english" | "spanish"
-
-// Module-level map of tabId → analysis interval ID
-const analysisIntervals = {};
+const noteBuilding       = {}; // tabId → boolean guard (one note at a time)
+const lastNoteTranscript = {}; // tabId → { text, language } for CHECK_CLAIMS
+const pendingAudio       = {}; // tabId → { resolve, reject, timer } awaiting AUDIO_CHUNK
 
 chrome.action.onClicked.addListener((tab) => {
   if (!tab.id) return;
@@ -80,15 +120,11 @@ async function getSessionActive(tabId) {
 // ─── Session Management ──────────────────────────────────────────────────────
 
 /**
- * Start a capture session:
- *  1. Get a stream ID from tabCapture (works in SW via getMediaStreamId)
- *  2. Create the offscreen document
- *  3. Tell the offscreen doc to start recording with that stream ID
+ * Start a capture session. Recording and caption collection begin, but no
+ * API is called until the viewer presses "Check now".
  */
 async function startSession(tab) {
   await setSessionActive(tab.id);
-
-  // Initialise the rolling transcript buffer for this tab
   transcriptBuffers[tab.id] = [];
 
   broadcast({ type: 'STATUS', payload: 'listening' });
@@ -115,19 +151,14 @@ async function startSession(tab) {
       tabId:    tab.id,
     });
 
-    // Start the analysis interval — runs independently of audio chunking
-    analysisIntervals[tab.id] = setInterval(() => {
-      runAnalysis(tab.id);
-    }, ANALYSIS_INTERVAL_MS);
-
-    console.log(`[FactLens] Session started for tab ${tab.id}`);
+    console.log(`[FactLens] Session started for tab ${tab.id} (on-demand mode)`);
 
   } catch (err) {
     console.error('[FactLens] startSession error:', err.message);
     broadcast({ type: 'ERROR', payload: `Could not start capture: ${err.message}` });
     broadcast({ type: 'STATUS', payload: 'idle' });
     await clearSessionActive(tab.id);
-    delete transcriptBuffers[tab.id];
+    cleanupTabState(tab.id);
   }
 }
 
@@ -136,25 +167,29 @@ async function startSession(tab) {
  * @param {number} tabId
  */
 async function stopSession(tabId) {
-  // Stop the analysis interval
-  if (analysisIntervals[tabId]) {
-    clearInterval(analysisIntervals[tabId]);
-    delete analysisIntervals[tabId];
-  }
+  cleanupTabState(tabId);
 
-  // Clear the rolling buffer and language
-  delete transcriptBuffers[tabId];
-  delete detectedLanguages[tabId];
-  delete lastTranscripts[tabId];
-  delete analysisRunning[tabId];
-
-  // Tell the offscreen doc to stop recording
   chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }).catch(() => {});
 
   await closeOffscreenDocument();
   await clearSessionActive(tabId);
   broadcast({ type: 'STATUS', payload: 'idle' });
   console.log(`[FactLens] Session stopped for tab ${tabId}`);
+}
+
+function cleanupTabState(tabId) {
+  delete transcriptBuffers[tabId];
+  delete detectedLanguages[tabId];
+  delete lastCaptions[tabId];
+  delete lastCaptionAt[tabId];
+  delete pageSignals[tabId];
+  delete noteBuilding[tabId];
+  delete lastNoteTranscript[tabId];
+  if (pendingAudio[tabId]) {
+    clearTimeout(pendingAudio[tabId].timer);
+    pendingAudio[tabId].reject(new Error('Session stopped'));
+    delete pendingAudio[tabId];
+  }
 }
 
 // ─── Offscreen Document Management ──────────────────────────────────────────
@@ -165,11 +200,9 @@ const OFFSCREEN_URL = chrome.runtime.getURL('offscreen.html');
  * Create the offscreen document if it doesn't already exist.
  */
 async function ensureOffscreenDocument() {
-  // Check if it's already open
   const existing = await chrome.offscreen.hasDocument?.();
   if (existing) return;
 
-  // getContexts is the preferred way to check in newer Chrome versions
   const contexts = await chrome.runtime.getContexts({
     contextTypes: ['OFFSCREEN_DOCUMENT'],
     documentUrls: [OFFSCREEN_URL],
@@ -180,7 +213,7 @@ async function ensureOffscreenDocument() {
   await chrome.offscreen.createDocument({
     url:      'offscreen.html',
     reasons:  ['USER_MEDIA'],
-    justification: 'Capture and chunk tab audio for transcription',
+    justification: 'Buffer tab audio locally for on-demand transcription',
   });
 
   console.log('[FactLens] Offscreen document created');
@@ -203,22 +236,24 @@ async function closeOffscreenDocument() {
 
 // ─── Message Handling ────────────────────────────────────────────────────────
 
-/**
- * Listen for messages from:
- *  - offscreen.js (TRANSCRIPT, STATUS, ERROR)
- *  - sidebar.js   (GET_STATUS)
- */
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
 
-    // Audio chunk from offscreen doc — fetch to backend and transcribe
+    // Requested audio arrived from the offscreen doc (viewer pressed Check now)
     case 'AUDIO_CHUNK':
-      handleAudioChunk(message.payload, message.mimeType, message.tabId);
+      resolvePendingAudio(message.tabId, message.payload, message.mimeType);
       break;
 
-    // Messages from the offscreen document — relay to the side panel
-    case 'TRANSCRIPT':
-      handleTranscript(message.tabId, message.payload);
+    // Caption snapshot from the content script — free transcript source
+    case 'CAPTION_TEXT':
+      handleCaptionText(sender.tab?.id, message.payload);
+      break;
+
+    // Page title / headline / image metadata from the content script
+    case 'PAGE_SIGNALS':
+      if (sender.tab?.id && message.payload) {
+        pageSignals[sender.tab.id] = message.payload;
+      }
       break;
 
     case 'STATUS':
@@ -226,17 +261,38 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       break;
 
     case 'ERROR':
-      broadcast({ type: 'ERROR', payload: message.payload });
+      // If we're waiting on audio and the offscreen doc reports a problem,
+      // fail the pending request immediately instead of timing out.
+      if (message.tabId && pendingAudio[message.tabId]) {
+        const pending = pendingAudio[message.tabId];
+        clearTimeout(pending.timer);
+        delete pendingAudio[message.tabId];
+        pending.reject(new Error(message.payload));
+      } else {
+        broadcast({ type: 'ERROR', payload: message.payload });
+      }
       break;
 
-    // Stop session request from the sidebar stop button
+    // "Check now" — build a Community Note for the active session
+    case 'ANALYZE_NOW':
+      chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {
+        Object.keys(activeSessions).forEach(tabId => buildNote(Number(tabId)));
+      });
+      break;
+
+    // "Check statements" on the note — run claims for the last note's transcript
+    case 'CHECK_CLAIMS':
+      chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {
+        Object.keys(activeSessions).forEach(tabId => runClaimCheck(Number(tabId)));
+      });
+      break;
+
     case 'STOP_SESSION':
       chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {
         Object.keys(activeSessions).forEach(tabId => stopSession(Number(tabId)));
       });
       break;
 
-    // Request from the side panel on load — reply with current session state
     case 'GET_STATUS':
       chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {
         const hasActive = Object.keys(activeSessions).length > 0;
@@ -246,86 +302,49 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-// ─── Audio Chunk → Backend ───────────────────────────────────────────────────
+// ─── Caption Handling ────────────────────────────────────────────────────────
 
 /**
- * Receive a base64-encoded audio chunk from the offscreen document,
- * POST it to the backend /transcribe endpoint, and handle the result.
- * Fetching from the service worker avoids the network restrictions that
- * affect offscreen documents.
- *
- * @param {string} base64  - base64-encoded audio data
- * @param {string} mimeType
- * @param {number} tabId
+ * Caption snapshot from the content script. Snapshots overlap as the caption
+ * window scrolls, so suffix/prefix dedup extracts just the new words, which
+ * accumulate in the rolling transcript buffer — for free.
+ * @param {number|undefined} tabId
+ * @param {string} text
  */
-async function handleAudioChunk(base64, mimeType, tabId) {
-  try {
-    // Decode base64 back to binary
-    const binary = atob(base64);
-    const bytes  = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+async function handleCaptionText(tabId, text) {
+  if (!tabId || !text || typeof text !== 'string') return;
+  if (!(await getSessionActive(tabId))) return;
 
-    const baseMime  = mimeType.split(';')[0].trim();
-    const extension = baseMime === 'audio/mpeg' ? 'mp3'
-                    : baseMime === 'audio/wav'  ? 'wav'
-                    : 'webm';
+  lastCaptionAt[tabId] = Date.now();
 
-    const formData = new FormData();
-    formData.append('audio', new Blob([bytes], { type: baseMime }), `chunk.${extension}`);
+  const prev = lastCaptions[tabId] ?? '';
+  const next = text.trim();
 
-    const res = await fetch(`${BACKEND_URL}/transcribe`, {
-      method: 'POST',
-      body:   formData,
-    });
+  // Fast path: captions usually grow cumulatively ("hello" → "hello there"),
+  // which the ≥3-word overlap dedup can't catch for short snapshots.
+  let newText;
+  if (prev && next.toLowerCase().startsWith(prev.toLowerCase())) {
+    newText = next.slice(prev.length);
+  } else {
+    newText = deduplicateOverlap(prev, next);
+  }
+  lastCaptions[tabId] = next;
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || `HTTP ${res.status}`);
-    }
+  if (!newText || newText.trim().length === 0) return;
 
-    const { text, language } = await res.json();
-
-    if (!text || text.trim().length === 0) {
-      console.log('[FactLens] Empty transcript (silence)');
-      broadcast({ type: 'STATUS', payload: 'listening' });
-      return;
-    }
-
-    console.log(`[FactLens] Transcript (${language ?? 'unknown'}): "${text.slice(0, 80)}"`);
-
-    // ── Overlap deduplication ──
-    // Because blobs overlap, Whisper may return text we already showed.
-    // Find the longest suffix of the previous transcript that matches a
-    // prefix of the new one, and only show the genuinely new portion.
-    const newText = deduplicateOverlap(lastTranscripts[tabId] ?? '', text);
-    lastTranscripts[tabId] = text;
-
-    if (!newText || newText.trim().length === 0) {
-      broadcast({ type: 'STATUS', payload: 'listening' });
-      return;
-    }
-
-    await handleTranscript(tabId, newText.trim(), language);
-
-  } catch (err) {
-    console.error('[FactLens] Audio chunk error:', err.message);
-    broadcast({ type: 'ERROR',  payload: `Transcription failed: ${err.message}` });
-    broadcast({ type: 'STATUS', payload: 'listening' });
+  if (!transcriptBuffers[tabId]) transcriptBuffers[tabId] = [];
+  transcriptBuffers[tabId].push(...newText.trim().split(/\s+/));
+  if (transcriptBuffers[tabId].length > BUFFER_MAX_WORDS) {
+    transcriptBuffers[tabId] = transcriptBuffers[tabId].slice(-BUFFER_MAX_WORDS);
   }
 }
 
-// ─── Overlap Deduplication ───────────────────────────────────────────────────
-
 /**
- * Given the previous transcript and the new one (which overlaps with it),
- * return only the genuinely new portion of the new transcript.
- *
- * Strategy: find the longest suffix of `prev` that appears as a prefix
- * of `next` (word-level comparison), then return everything after that match.
- *
- * @param {string} prev - previous transcript text
- * @param {string} next - new transcript text (may start with repeated words)
- * @returns {string} - only the new words not already shown
+ * Given the previous caption snapshot and the new one (which overlaps with it),
+ * return only the genuinely new portion of the new text.
+ * @param {string} prev
+ * @param {string} next
+ * @returns {string}
  */
 function deduplicateOverlap(prev, next) {
   if (!prev) return next;
@@ -333,91 +352,173 @@ function deduplicateOverlap(prev, next) {
   const prevWords = prev.trim().split(/\s+/);
   const nextWords = next.trim().split(/\s+/);
 
-  // Try matching the last N words of prev against the first N words of next
-  // Start with the longest possible overlap and work down
   const maxOverlap = Math.min(prevWords.length, nextWords.length, 20);
 
   for (let overlap = maxOverlap; overlap >= 3; overlap--) {
     const prevSuffix = prevWords.slice(-overlap).join(' ').toLowerCase();
     const nextPrefix = nextWords.slice(0, overlap).join(' ').toLowerCase();
     if (prevSuffix === nextPrefix) {
-      // Found the overlap — return only the new words after it
-      const newWords = nextWords.slice(overlap);
-      return newWords.join(' ');
+      return nextWords.slice(overlap).join(' ');
     }
   }
 
-  // No significant overlap found — return the full new transcript
   return next;
 }
 
-// ─── Transcript Handling ─────────────────────────────────────────────────────
+// ─── Note Building (the "Check now" pipeline) ────────────────────────────────
 
 /**
- * Called when a transcript chunk arrives from Whisper.
- * Appends to the rolling buffer and broadcasts to the sidebar immediately.
+ * Build a Community Note for the tab: get a transcript (captions preferred,
+ * one Whisper call otherwise), then one /coverage call. Total cost per press:
+ * 0-1 transcription + 2 LLM calls + 1 NewsAPI request.
  * @param {number} tabId
- * @param {string} text
- * @param {string|null} language - detected language e.g. "english", "spanish"
  */
-async function handleTranscript(tabId, text, language = null) {
-  broadcast({ type: 'TRANSCRIPT', payload: text });
-  broadcast({ type: 'STATUS', payload: 'listening' });
-
-  // Store the detected language for the analysis interval
-  if (language) detectedLanguages[tabId] = language;
-
-  if (!transcriptBuffers[tabId]) transcriptBuffers[tabId] = [];
-  const newWords = text.trim().split(/\s+/);
-  transcriptBuffers[tabId].push(...newWords);
-
-  if (transcriptBuffers[tabId].length > BUFFER_MAX_WORDS) {
-    transcriptBuffers[tabId] = transcriptBuffers[tabId].slice(-BUFFER_MAX_WORDS);
+async function buildNote(tabId) {
+  if (noteBuilding[tabId]) {
+    console.log('[FactLens] Note already being built, ignoring');
+    return;
   }
+  noteBuilding[tabId] = true;
+  broadcast({ type: 'STATUS', payload: 'processing' });
 
-  console.log(`[FactLens] Buffer: ${transcriptBuffers[tabId].length} words (${language ?? 'unknown'})`);
+  try {
+    const { text, language } = await getTranscript(tabId);
+
+    if (!text || text.trim().split(/\s+/).length < 8) {
+      broadcast({ type: 'ERROR', payload: 'Not enough speech captured yet — let it listen a little longer, then try again.' });
+      return;
+    }
+
+    lastNoteTranscript[tabId] = { text, language };
+    console.log(`[FactLens] Building note from ${text.split(/\s+/).length} words (${language})`);
+
+    const coverage = await fetchCoverage(tabId, text, language);
+    broadcast({ type: 'COVERAGE', payload: coverage });
+
+  } catch (err) {
+    console.error('[FactLens] buildNote error:', err.message);
+    broadcast({ type: 'ERROR', payload: `Could not build note: ${err.message}` });
+  } finally {
+    noteBuilding[tabId] = false;
+    broadcast({ type: 'STATUS', payload: 'listening' });
+    broadcast({ type: 'NOTE_DONE' });
+  }
 }
 
 /**
- * Run fact-check and bias analysis against the current rolling buffer.
- * Called on the ANALYSIS_INTERVAL_MS timer — independent of audio chunking.
+ * "Check statements" — run claim extraction + verdicts against the transcript
+ * of the most recently built note. One /factcheck call.
  * @param {number} tabId
  */
-async function runAnalysis(tabId) {
-  // Skip if a previous analysis cycle is still running — prevents rate limit pile-up
-  if (analysisRunning[tabId]) {
-    console.log('[FactLens] Analysis still running, skipping cycle');
+async function runClaimCheck(tabId) {
+  const noteTranscript = lastNoteTranscript[tabId];
+  if (!noteTranscript) {
+    broadcast({ type: 'ERROR', payload: 'Build a note first (Check now), then check its statements.' });
+    broadcast({ type: 'CLAIMS_DONE' });
     return;
   }
 
-  const buffer = transcriptBuffers[tabId];
-  if (!buffer || buffer.length < 10) return;
-
-  analysisRunning[tabId] = true;
-  const bufferText = buffer.join(' ');
-  const language   = detectedLanguages[tabId] ?? 'english';
-  console.log(`[FactLens] Running analysis on ${buffer.length} words (${language})...`);
-
+  broadcast({ type: 'STATUS', payload: 'processing' });
   try {
-    const [factCheckResult, biasResult] = await Promise.allSettled([
-      fetchFactCheck(bufferText, language),
-      fetchBiasAnalysis(bufferText, language),
-    ]);
-
-    if (factCheckResult.status === 'fulfilled' && factCheckResult.value.length > 0) {
-      broadcast({ type: 'FACTCHECK', payload: factCheckResult.value });
-    } else if (factCheckResult.status === 'rejected') {
-      broadcast({ type: 'ERROR', payload: 'Fact-check failed: ' + factCheckResult.reason.message });
-    }
-
-    if (biasResult.status === 'fulfilled') {
-      broadcast({ type: 'BIAS', payload: biasResult.value });
-    } else if (biasResult.status === 'rejected') {
-      broadcast({ type: 'ERROR', payload: 'Bias analysis failed: ' + biasResult.reason.message });
-    }
+    const claims = await fetchFactCheck(noteTranscript.text, noteTranscript.language);
+    broadcast({ type: 'FACTCHECK', payload: claims });
+  } catch (err) {
+    console.error('[FactLens] runClaimCheck error:', err.message);
+    broadcast({ type: 'ERROR', payload: `Statement check failed: ${err.message}` });
   } finally {
-    analysisRunning[tabId] = false;
+    broadcast({ type: 'STATUS', payload: 'listening' });
+    broadcast({ type: 'CLAIMS_DONE' });
   }
+}
+
+/**
+ * Get a transcript for the note. Captions are free and more accurate, so if
+ * the caption buffer is fresh and substantial, use it and skip Whisper
+ * entirely. Otherwise: request the buffered audio ring from the offscreen
+ * doc and make ONE transcription call.
+ * @param {number} tabId
+ * @returns {Promise<{ text: string, language: string }>}
+ */
+async function getTranscript(tabId) {
+  const buffer        = transcriptBuffers[tabId];
+  const captionsFresh = lastCaptionAt[tabId] && (Date.now() - lastCaptionAt[tabId]) < CAPTION_USABLE_MS;
+
+  if (captionsFresh && buffer && buffer.length >= 15) {
+    console.log(`[FactLens] Using caption transcript (${buffer.length} words) — no Whisper call`);
+    return {
+      text:     buffer.join(' '),
+      language: detectedLanguages[tabId] ?? 'english',
+    };
+  }
+
+  const { base64, mimeType } = await requestBufferedAudio(tabId);
+  return transcribeOnce(base64, mimeType, tabId);
+}
+
+/**
+ * Ask the offscreen document for its audio ring buffer and wait for the
+ * AUDIO_CHUNK reply.
+ * @param {number} tabId
+ * @returns {Promise<{ base64: string, mimeType: string }>}
+ */
+function requestBufferedAudio(tabId) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      delete pendingAudio[tabId];
+      reject(new Error('Timed out waiting for buffered audio.'));
+    }, 8000);
+
+    pendingAudio[tabId] = { resolve, reject, timer };
+    chrome.runtime.sendMessage({ type: 'REQUEST_AUDIO' }).catch((err) => {
+      clearTimeout(timer);
+      delete pendingAudio[tabId];
+      reject(err);
+    });
+  });
+}
+
+function resolvePendingAudio(tabId, base64, mimeType) {
+  const pending = pendingAudio[tabId];
+  if (!pending) return; // unsolicited chunk — shouldn't happen in on-demand mode
+  clearTimeout(pending.timer);
+  delete pendingAudio[tabId];
+  pending.resolve({ base64, mimeType });
+}
+
+/**
+ * ONE transcription call for the assembled audio ring (~90s of audio).
+ * @returns {Promise<{ text: string, language: string }>}
+ */
+async function transcribeOnce(base64, mimeType, tabId) {
+  const binary = atob(base64);
+  const bytes  = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+  const baseMime  = mimeType.split(';')[0].trim();
+  const extension = baseMime === 'audio/mpeg' ? 'mp3'
+                  : baseMime === 'audio/wav'  ? 'wav'
+                  : 'webm';
+
+  const formData = new FormData();
+  formData.append('audio', new Blob([bytes], { type: baseMime }), `chunk.${extension}`);
+
+  const settings = await getSettings();
+  const res = await fetchWithTimeout(`${settings.backendUrl}/transcribe`, {
+    method:  'POST',
+    headers: buildKeyHeaders(settings),
+    body:    formData,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+
+  const { text, language } = await res.json();
+  if (language) detectedLanguages[tabId] = language;
+
+  console.log(`[FactLens] Transcribed ${text?.split(/\s+/).length ?? 0} words (${language ?? 'unknown'}) in one call`);
+  return { text: text ?? '', language: language ?? detectedLanguages[tabId] ?? 'english' };
 }
 
 // ─── Backend API Calls ───────────────────────────────────────────────────────
@@ -439,22 +540,42 @@ async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
 }
 
 async function fetchFactCheck(text, language = 'english') {
-  const res = await fetchWithTimeout(`${BACKEND_URL}/factcheck`, {
+  const settings = await getSettings();
+  const res = await fetchWithTimeout(`${settings.backendUrl}/factcheck`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...buildKeyHeaders(settings) },
     body:    JSON.stringify({ transcript: text, language }),
   });
   if (!res.ok) throw new Error(`/factcheck returned ${res.status}`);
   return res.json();
 }
 
-async function fetchBiasAnalysis(text, language = 'english') {
-  const res = await fetchWithTimeout(`${BACKEND_URL}/bias`, {
+/**
+ * Fetch multi-outlet coverage + missing context for the current story.
+ * Sends the tab's hostname and scraped page signals so the backend can
+ * cross-check the story identification.
+ */
+async function fetchCoverage(tabId, text, language = 'english') {
+  let outlet = null;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab?.url) outlet = new URL(tab.url).hostname;
+  } catch { /* tab gone or URL unavailable — outlet rating is optional */ }
+
+  const signals  = pageSignals[tabId] ?? {};
+  const settings = await getSettings();
+  const res = await fetchWithTimeout(`${settings.backendUrl}/coverage`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ transcript: text, language }),
+    headers: { 'Content-Type': 'application/json', ...buildKeyHeaders(settings) },
+    body:    JSON.stringify({
+      transcript:   text,
+      language,
+      outlet,
+      pageTitle:    signals.pageTitle    || null,
+      onScreenText: signals.onScreenText || null,
+    }),
   });
-  if (!res.ok) throw new Error(`/bias returned ${res.status}`);
+  if (!res.ok) throw new Error(`/coverage returned ${res.status}`);
   return res.json();
 }
 
@@ -473,6 +594,5 @@ function broadcast(message) {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const isActive = await getSessionActive(tabId);
   if (isActive) await stopSession(tabId);
-  // Clean up buffer even if session wasn't formally active
-  delete transcriptBuffers[tabId];
+  cleanupTabState(tabId);
 });
