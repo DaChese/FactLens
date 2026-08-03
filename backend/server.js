@@ -11,6 +11,8 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import { fileURLToPath } from 'url';
+import path from 'path';
 
 import transcribeRouter  from './routes/transcribe.js';
 import factcheckRouter   from './routes/factcheck.js';
@@ -40,24 +42,41 @@ if (!process.env.NEWSAPI_KEY) {
 const app        = express();
 const PORT       = process.env.PORT || 3001;
 const STARTED_AT = new Date().toISOString();
+const __dirname  = path.dirname(fileURLToPath(import.meta.url));
+
+// Railway sits behind a proxy; trust one hop so req.protocol reflects HTTPS.
+app.set('trust proxy', 1);
 
 // ─── Middleware ──────────────────────────────────────────────────────────────
 
-// Allow requests from the Chrome extension (chrome-extension://* scheme)
-// and localhost during development.
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (e.g., curl, Postman) and extension origins
-    if (!origin || origin.startsWith('chrome-extension://') || origin === `http://localhost:${PORT}`) {
-      callback(null, true);
-    } else {
-      callback(new Error(`CORS: origin ${origin} not allowed`));
-    }
-  },
-}));
+// Allow requests from the Chrome extension, localhost during development, and
+// the same origin that serves the Railway-hosted web prototype.
+app.use((req, res, next) => {
+  const sameOrigin = `${req.protocol}://${req.get('host')}`;
+  const publicOrigin = process.env.PUBLIC_ORIGIN;
+
+  return cors({
+    origin: (origin, callback) => {
+      if (
+        !origin ||
+        origin === sameOrigin ||
+        origin === publicOrigin ||
+        origin.startsWith('chrome-extension://') ||
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS: origin ${origin} not allowed`));
+      }
+    },
+  })(req, res, next);
+});
 
 // Parse JSON bodies
 app.use(express.json());
+
+// Serve the Railway-hosted web prototype from the same backend service.
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 

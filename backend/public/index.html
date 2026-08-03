@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FactLens Web</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">FactLens Web Prototype</p>
+      <h1>Community notes for live video</h1>
+    </div>
+    <div class="status" id="status-pill">Checking backend</div>
+  </header>
+
+  <main class="shell">
+    <section class="panel input-panel" aria-labelledby="input-title">
+      <div class="section-head">
+        <div>
+          <h2 id="input-title">Build a Note</h2>
+          <p>Paste the story text, page headline, or transcript you want FactLens to check.</p>
+        </div>
+        <button class="secondary" id="sample-btn" type="button">Load Sample</button>
+      </div>
+
+      <label>
+        Transcript or segment text
+        <textarea id="transcript" rows="9" placeholder="Paste captions, transcript, or a short summary of the segment."></textarea>
+      </label>
+
+      <div class="grid two">
+        <label>
+          Page title or headline
+          <input id="page-title" type="text" placeholder="Example: Senate passes new border funding bill" />
+        </label>
+        <label>
+          Watched outlet domain
+          <input id="outlet" type="text" placeholder="Example: cnn.com" />
+        </label>
+      </div>
+
+      <label>
+        On-screen text
+        <textarea id="screen-text" rows="4" placeholder="Optional: chyron, video title, image caption, or page metadata."></textarea>
+      </label>
+
+      <div class="grid two compact">
+        <label>
+          Language
+          <select id="language">
+            <option value="english">English</option>
+            <option value="spanish">Spanish</option>
+          </select>
+        </label>
+        <label>
+          Backend URL
+          <input id="backend-url" type="url" value="" />
+        </label>
+      </div>
+
+      <details class="keys">
+        <summary>API key overrides</summary>
+        <p>Leave these blank to use Railway environment variables.</p>
+        <label>
+          Groq key
+          <input id="groq-key" type="password" autocomplete="off" />
+        </label>
+        <label>
+          Tavily key
+          <input id="tavily-key" type="password" autocomplete="off" />
+        </label>
+        <label>
+          NewsAPI key
+          <input id="news-key" type="password" autocomplete="off" />
+        </label>
+      </details>
+
+      <div class="actions">
+        <button id="build-btn" type="button">Build Community Note</button>
+        <button class="secondary" id="clear-btn" type="button">Clear</button>
+      </div>
+    </section>
+
+    <section class="panel note-panel" aria-labelledby="note-title">
+      <div class="section-head">
+        <div>
+          <h2 id="note-title">Community Note</h2>
+          <p id="activity">Ready.</p>
+        </div>
+        <button class="secondary" id="refresh-status-btn" type="button">API Status</button>
+      </div>
+
+      <article class="note" id="note">
+        <p class="placeholder">Build a note to see story context, coverage spread, and follow-up checks.</p>
+      </article>
+
+      <div class="followups">
+        <button id="claims-btn" type="button" disabled>Check Statements</button>
+        <button id="discussion-btn" type="button" disabled>Check Public Reaction</button>
+      </div>
+
+      <section class="api-status" id="api-status" hidden></section>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
