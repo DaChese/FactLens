@@ -9,7 +9,7 @@ The current `main` branch is v1.5.0. It is local-development focused: the backen
 runs on your machine, and the extension talks to `http://localhost:3001` unless
 you change the backend URL in the extension settings page.
 
-The backend also serves a lightweight web prototype from `/`. This is useful for
+The backend also serves the FactLens Analysis Studio from `/`. This is useful for
 Railway hosting and demos: visitors can paste transcript/page text, build a
 Community Note, and run the same `/coverage`, `/factcheck`, and `/discussion`
 pipeline without installing the Chrome extension.
@@ -73,7 +73,7 @@ UI is a monochrome newsprint-style sidebar, with green/red reserved for Start/St
 | Outlet ratings | Static JSON dataset in `backend/data/bias-ratings.json` |
 | Backend | Node.js + Express |
 | UI | Vanilla JS + CSS |
-| Web prototype | Static HTML/CSS/JS served from `backend/public` |
+| Web studio | Static HTML/CSS/JS served from `backend/public` |
 
 ## Requirements
 
@@ -141,7 +141,7 @@ Header keys take priority over `.env`. Blank settings fall back to `.env`.
 4. Select `factlens/extension/`.
 5. Click the FactLens icon to open the side panel.
 
-### 4. Use the web prototype
+### 4. Use the Analysis Studio
 
 With the backend running, open:
 
@@ -149,10 +149,30 @@ With the backend running, open:
 http://localhost:3001/
 ```
 
-On Railway, the same page is served from the Railway service URL. The web version
-does not have Chrome extension privileges, so it cannot inspect another tab's DOM
-or capture captions automatically. It is a hosted demo surface for pasted
-transcripts, page titles, and on-screen text.
+On Railway, the same page is served from the Railway service URL. The web studio
+does not have Chrome extension privileges, so it cannot inspect another tab's DOM,
+capture audio, or capture captions automatically. It is a hosted manual analysis
+surface for pasted transcripts, page titles, source domains, and on-screen text.
+
+The studio workflow is:
+
+1. Paste transcript or segment text.
+2. Optionally add a page title, on-screen text, source domain, and language.
+3. Press **Build Community Note**.
+4. Review the identified story, match signals, missing context, and other coverage.
+5. Optionally press **Check statements** or **Check public reaction**.
+
+The page includes three clearly labeled sample inputs and a collapsed **Developer
+settings** section for backend URL and API-key overrides. These overrides preserve
+the same request-header behavior as the extension:
+
+- `X-Groq-Key`
+- `X-Tavily-Key`
+- `X-Newsapi-Key`
+
+The current web studio stores these overrides in browser `localStorage`, matching
+the previous prototype behavior. Do not use shared machines for private provider
+keys.
 
 ## Using FactLens
 
@@ -230,15 +250,15 @@ The old `/bias` route has been removed.
 
 ## Railway Hosting
 
-Railway can host the backend API and web prototype as one Node service:
+Railway can host the backend API and web studio as one Node service:
 
 1. Point Railway at `backend/` as the service root.
 2. Use `npm start` as the start command.
 3. Set `GROQ_API_KEY`, `TAVILY_API_KEY`, and `NEWSAPI_KEY` in Railway variables,
-   or leave them blank and enter keys in the web prototype/API key overrides.
+   or leave them blank and enter keys in the web studio developer settings.
 4. Optional: set `PUBLIC_ORIGIN` to your public Railway/custom domain if you put
    the frontend and API on different origins.
-5. Open the Railway public URL. `/` serves the web prototype; API routes remain
+5. Open the Railway public URL. `/` serves the web studio; API routes remain
    available under `/coverage`, `/factcheck`, `/discussion`, `/transcribe`,
    `/health`, and `/status`.
 
@@ -265,6 +285,7 @@ factlens/
 |   |-- .env.example
 |   |-- public/
 |   |   |-- index.html
+|   |   |-- samples.js
 |   |   |-- styles.css
 |   |   `-- app.js
 |   |-- data/
@@ -284,6 +305,7 @@ factlens/
 |   |-- architecture.md
 |   |-- demo-script.md
 |   |-- ethics-and-trust.md
+|   |-- product-phases.md
 |   |-- roadmap-phase2-3.md
 |   `-- user-journey.md
 |-- CHANGELOG.md
@@ -297,6 +319,8 @@ factlens/
   Community Notes architecture.
 - `docs/ai-methodology.md` describes the AI decision flow.
 - `docs/ethics-and-trust.md` documents trust boundaries and limitations.
+- `docs/product-phases.md` documents the Phase 1 studio and later dashboard,
+  report, and public/community directions.
 - `docs/user-journey.md` explains the intended viewer workflow.
 - `docs/demo-script.md` gives a demo run-of-show.
 - `docs/roadmap-phase2-3.md` covers live broadcast and ATSC 3.0 feasibility.

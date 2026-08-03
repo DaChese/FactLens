@@ -3,108 +3,168 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FactLens Web</title>
+  <title>FactLens Analysis Studio</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <p class="eyebrow">FactLens Web Prototype</p>
-      <h1>Community notes for live video</h1>
+  <header class="site-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">FL</span>
+      <div>
+        <p class="eyebrow">FactLens Analysis Studio</p>
+        <h1>Understand the story behind the segment</h1>
+      </div>
     </div>
-    <div class="status" id="status-pill">Checking backend</div>
+    <div class="status-pill" id="status-pill" role="status">Checking backend</div>
   </header>
 
-  <main class="shell">
-    <section class="panel input-panel" aria-labelledby="input-title">
-      <div class="section-head">
-        <div>
-          <h2 id="input-title">Build a Note</h2>
-          <p>Paste the story text, page headline, or transcript you want FactLens to check.</p>
-        </div>
-        <button class="secondary" id="sample-btn" type="button">Load Sample</button>
+  <main>
+    <section class="intro" aria-labelledby="intro-title">
+      <div>
+        <h2 id="intro-title">Manual studio for pasted transcripts</h2>
+        <p>Paste a transcript or page details to build a neutral Community Note using the same analysis pipeline as the FactLens extension.</p>
       </div>
-
-      <label>
-        Transcript or segment text
-        <textarea id="transcript" rows="9" placeholder="Paste captions, transcript, or a short summary of the segment."></textarea>
-      </label>
-
-      <div class="grid two">
-        <label>
-          Page title or headline
-          <input id="page-title" type="text" placeholder="Example: Senate passes new border funding bill" />
-        </label>
-        <label>
-          Watched outlet domain
-          <input id="outlet" type="text" placeholder="Example: cnn.com" />
-        </label>
-      </div>
-
-      <label>
-        On-screen text
-        <textarea id="screen-text" rows="4" placeholder="Optional: chyron, video title, image caption, or page metadata."></textarea>
-      </label>
-
-      <div class="grid two compact">
-        <label>
-          Language
-          <select id="language">
-            <option value="english">English</option>
-            <option value="spanish">Spanish</option>
-          </select>
-        </label>
-        <label>
-          Backend URL
-          <input id="backend-url" type="url" value="" />
-        </label>
-      </div>
-
-      <details class="keys">
-        <summary>API key overrides</summary>
-        <p>Leave these blank to use Railway environment variables.</p>
-        <label>
-          Groq key
-          <input id="groq-key" type="password" autocomplete="off" />
-        </label>
-        <label>
-          Tavily key
-          <input id="tavily-key" type="password" autocomplete="off" />
-        </label>
-        <label>
-          NewsAPI key
-          <input id="news-key" type="password" autocomplete="off" />
-        </label>
-      </details>
-
-      <div class="actions">
-        <button id="build-btn" type="button">Build Community Note</button>
-        <button class="secondary" id="clear-btn" type="button">Clear</button>
-      </div>
+      <p class="notice">The web studio cannot automatically capture another browser tab. Paste the transcript, page title, or visible text you want FactLens to analyze.</p>
     </section>
 
-    <section class="panel note-panel" aria-labelledby="note-title">
-      <div class="section-head">
-        <div>
-          <h2 id="note-title">Community Note</h2>
-          <p id="activity">Ready.</p>
+    <section class="workflow" aria-label="Analysis workflow">
+      <span>Enter or load content</span>
+      <span aria-hidden="true">→</span>
+      <span>Build Community Note</span>
+      <span aria-hidden="true">→</span>
+      <span>Review context</span>
+      <span aria-hidden="true">→</span>
+      <span>Run follow-up checks</span>
+    </section>
+
+    <div class="studio-grid">
+      <section class="input-area" aria-labelledby="input-title">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Input</p>
+            <h2 id="input-title">Analyze a segment</h2>
+          </div>
+          <button class="text-button" id="clear-btn" type="button">Clear form</button>
         </div>
-        <button class="secondary" id="refresh-status-btn" type="button">API Status</button>
+
+        <form id="analysis-form">
+          <div class="field field-large">
+            <label for="transcript">Transcript or segment text</label>
+            <p class="helper" id="transcript-help">Paste captions, a transcript, or the portion of the discussion you want to review.</p>
+            <textarea id="transcript" rows="14" aria-describedby="transcript-help" placeholder="Paste the segment text here."></textarea>
+          </div>
+
+          <div class="field">
+            <label for="page-title">Page title or headline <span>optional</span></label>
+            <p class="helper" id="title-help">Add the title shown on the page to help FactLens identify the correct story.</p>
+            <input id="page-title" type="text" aria-describedby="title-help" placeholder="Example: Supreme Court hears challenge to social media laws" />
+          </div>
+
+          <div class="field">
+            <label for="screen-text">On-screen text <span>optional</span></label>
+            <p class="helper" id="screen-help">Add banners, lower-thirds, captions, or other visible text.</p>
+            <textarea id="screen-text" rows="5" aria-describedby="screen-help" placeholder="Example: Justices weigh state laws that restrict platform moderation."></textarea>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label for="outlet">Source domain <span>optional</span></label>
+              <input id="outlet" type="text" placeholder="Example: apnews.com" />
+            </div>
+            <div class="field">
+              <label for="language">Language</label>
+              <select id="language">
+                <option value="english">English</option>
+                <option value="spanish">Spanish</option>
+              </select>
+            </div>
+          </div>
+
+          <section class="samples" aria-labelledby="samples-title">
+            <div class="section-head compact-head">
+              <div>
+                <p class="eyebrow">Samples</p>
+                <h3 id="samples-title">Try demo content</h3>
+              </div>
+            </div>
+            <div class="sample-list" id="sample-list"></div>
+          </section>
+
+          <div class="primary-actions">
+            <button id="build-btn" type="submit">Build Community Note</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="results-area" aria-labelledby="results-title">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Results</p>
+            <h2 id="results-title">Community Note</h2>
+          </div>
+          <p class="activity" id="activity" role="status" aria-live="polite">Ready.</p>
+        </div>
+
+        <article class="note" id="note" tabindex="-1">
+          <p class="placeholder">Build a note to see story context, coverage, and follow-up checks.</p>
+        </article>
+
+        <section class="followups" aria-labelledby="followups-title">
+          <div>
+            <p class="eyebrow">Follow-up actions</p>
+            <h3 id="followups-title">Check only when needed</h3>
+          </div>
+          <div class="followup-actions">
+            <button id="claims-btn" type="button" disabled>Check statements</button>
+            <button id="discussion-btn" type="button" disabled>Check public reaction</button>
+          </div>
+        </section>
+
+        <details class="developer-settings">
+          <summary>Developer settings</summary>
+          <p>Most visitors do not need these settings. Use them only when testing with your own provider keys or backend.</p>
+
+          <div class="field">
+            <label for="backend-url">Backend URL override</label>
+            <input id="backend-url" type="url" value="" autocomplete="off" />
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label for="groq-key">Groq API key override</label>
+              <input id="groq-key" type="password" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="tavily-key">Tavily API key override</label>
+              <input id="tavily-key" type="password" autocomplete="off" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="news-key">NewsAPI key override</label>
+            <input id="news-key" type="password" autocomplete="off" />
+          </div>
+
+          <button class="text-button" id="refresh-status-btn" type="button">Refresh provider status</button>
+          <div class="api-status" id="api-status" hidden></div>
+        </details>
+      </section>
+    </div>
+
+    <section class="methodology" aria-labelledby="methodology-title">
+      <div>
+        <p class="eyebrow">Methodology</p>
+        <h2 id="methodology-title">What the studio does</h2>
       </div>
-
-      <article class="note" id="note">
-        <p class="placeholder">Build a note to see story context, coverage spread, and follow-up checks.</p>
-      </article>
-
-      <div class="followups">
-        <button id="claims-btn" type="button" disabled>Check Statements</button>
-        <button id="discussion-btn" type="button" disabled>Check Public Reaction</button>
+      <div class="method-grid">
+        <p>FactLens identifies the story, compares other outlet coverage, and extracts missing context only when the story match is strong enough.</p>
+        <p>Statement checks and public reaction are separate, on-demand steps. Public discussion is not treated as verified reporting.</p>
+        <p>The browser studio does not store transcripts, capture audio, inspect another tab, or expose Railway environment variables to the page.</p>
       </div>
-
-      <section class="api-status" id="api-status" hidden></section>
     </section>
   </main>
 
+  <script src="samples.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

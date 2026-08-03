@@ -1,170 +1,78 @@
-# FactLens — Architecture Overview
+# FactLens Architecture Overview
 
-## System Diagram
+FactLens is a Community Notes-style tool for live or pasted video context. The current system has two user surfaces that share one backend.
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Chrome Browser                                                          │
-│                                                                          │
-│  ┌──────────────┐  tabCapture   ┌───────────────────────────────────┐   │
-│  │  Active Tab  │ ────────────► │  background.js (Service Worker)   │   │
-│  │  (any page)  │               │                                   │   │
-│  │              │               │  • Opens Side Panel               │   │
-│  │ ┌──────────┐ │               │  • Gets stream ID (tabCapture)    │   │
-│  │ │content.js│ │               │  • Manages session state          │   │
-│  │ │(future   │ │               │  • Rolling 150-word buffer        │   │
-│  │ │ in-page  │ │               │  • 20s analysis interval          │   │
-│  │ │ features)│ │               │  • Overlap deduplication          │   │
-│  │ └──────────┘ │               │  • Broadcasts to side panel       │   │
-│  └──────────────┘               └──────────────┬────────────────────┘   │
-│                                                │                         │
-│                          ┌─────────────────────┘                         │
-│                          │ START_RECORDING / AUDIO_CHUNK                 │
-│                          ▼                                               │
-│              ┌───────────────────────────┐                               │
-│              │  offscreen.js             │                               │
-│              │  (Offscreen Document)     │                               │
-│              │                           │                               │
-│              │  • getUserMedia (stream)  │                               │
-│              │  • AudioContext passthru  │                               │
-│              │  • MediaRecorder 500ms    │                               │
-│              │  • Ring buffer (6s / 12  │                               │
-│              │    slots, 3s overlap)     │                               │
-│              │  • Base64 encode → send  │                               │
-│              └───────────────────────────┘                               │
-│                                                                          │
-│              ┌───────────────────────────────────────────────────────┐   │
-│              │  Chrome Side Panel  (sidebar/sidebar.html)            │   │
-│              │                                                       │   │
-│              │  • Live transcript feed                               │   │
-│              │  • Fact-check verdict cards (True/False/Unverified)   │   │
-│              │  • Political lean meter (Left ←→ Right)              │   │
-│              │  • Emotional charge bar                               │   │
-│              └───────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────────┘
-                          │ HTTP (localhost:3001)
-                          ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Node.js / Express Backend                                          │
-│                                                                     │
-│  POST /transcribe ──► Groq Whisper (whisper-large-v3-turbo)         │
-│  POST /factcheck  ──► Groq LLM (llama-3.3-70b) + Tavily Search     │
-│  POST /bias       ──► Groq LLM (llama-3.3-70b)                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+## Surfaces
 
-## Component Responsibilities
+| Surface | Responsibility |
+|---|---|
+| Chrome extension | Opens the side panel, captures tab audio with an offscreen document, reads captions/page signals, and triggers fast analysis for the active tab. |
+| Railway Analysis Studio | Lets visitors manually paste transcript and page context, then run the same backend analysis without installing the extension. |
+| Express backend | Proxies third-party API calls, applies provider key overrides, rate limits requests, and returns structured note/follow-up data. |
 
-### Extension
+The Phase 1 stack stays intentionally small: Manifest V3, Node/Express, vanilla JavaScript, and static files in `backend/public`.
 
-| File | Role |
-|------|------|
-| `manifest.json` | MV3 config — permissions, service worker, side panel, offscreen |
-| `background.js` | Service worker — session lifecycle, rolling buffer, overlap dedup, backend fetch, broadcast |
-| `content.js` | Content script — placeholder for future in-page claim highlighting |
-| `offscreen.html` | Offscreen document shell |
-| `offscreen.js` | Audio capture (getUserMedia), passthrough (AudioContext), ring buffer chunking |
-| `sidebar/sidebar.html` | Side panel UI shell |
-| `sidebar/sidebar.css` | Dark-mode styles — verdict colors, bias meter, emotion bar |
-| `sidebar/sidebar.js` | Renders transcript, fact-check cards, bias meter from runtime messages |
+## Request Flow
 
-### Backend
+1. The extension or web studio sends transcript and optional page context to `POST /coverage`.
+2. `/coverage` asks Groq to identify the story and search query.
+3. `/coverage` queries NewsAPI for other outlets covering that story.
+4. The backend cross-checks the identified story against page signals and returned headlines.
+5. Low-confidence matches withhold articles and missing context.
+6. Confident matches can include outlet coverage and missing-context items with source URLs.
+7. Follow-up buttons call `POST /factcheck` and `POST /discussion` only after a note exists.
 
-| File | Role |
-|------|------|
-| `server.js` | Express app — CORS, middleware, route mounting, health check |
-| `routes/transcribe.js` | Proxies audio blobs to Groq Whisper, returns `{ text, language }` |
-| `routes/factcheck.js` | Claim extraction → Tavily search → Groq verdict, with 1-hour claim cache |
-| `routes/bias.js` | Language tone/framing analysis via Groq LLM |
+The web studio cannot capture another tab. It only sends the fields the user pasted into the page.
 
-## Data Flow
+## Backend Routes
 
-1. User clicks the FactLens icon → `background.js` calls `chrome.sidePanel.open()` synchronously
-2. `chrome.tabCapture.getMediaStreamId()` returns a stream ID (MV3-compatible)
-3. An offscreen document is created; the stream ID is passed to `offscreen.js`
-4. `offscreen.js` calls `getUserMedia` with the stream ID to get the `MediaStream`
-5. Audio is routed through an `AudioContext` → speakers (passthrough, user still hears the tab)
-6. `MediaRecorder` fires `ondataavailable` every 500ms; chunks accumulate in a 12-slot ring buffer
-7. Every 6 new chunks (~3s), the full ring buffer (6s of audio) is base64-encoded and sent to `background.js`
-8. `background.js` decodes the base64, POSTs the blob to `POST /transcribe`
-9. Groq Whisper returns `{ text, language }` — language is auto-detected
-10. Overlap deduplication strips repeated words from the previous chunk boundary
-11. New transcript text is broadcast to the side panel immediately and added to the rolling buffer
-12. Every 20 seconds, `runAnalysis()` fires: sends the rolling buffer to `/factcheck` and `/bias` in parallel
-13. Fact-check results (verdict, confidence, reasoning, sources) are broadcast to the side panel
-14. Bias results (lean score, emotion score, framing label) update the meter
-
-## Audio Pipeline Detail
-
-```
-MediaRecorder (500ms timeslice)
-    │
-    ▼ ondataavailable
-Ring buffer [slot 0..11] — 12 × 500ms = 6 seconds total
-    │
-    ▼ every 6 new chunks (3 seconds)
-Blob = concat(ring[0..11])   ← always 6s, overlaps 3s with previous blob
-    │
-    ▼ base64 encode
-background.js → POST /transcribe
-    │
-    ▼ Groq Whisper
-{ text, language }
-    │
-    ▼ deduplicateOverlap(prev, next)
-New words only → sidebar + rolling buffer
-```
-
-## Message Types (background → side panel)
-
-| Type | Payload | Description |
-|------|---------|-------------|
-| `STATUS` | `'idle' \| 'listening' \| 'processing'` | Session state change |
-| `TRANSCRIPT` | `string` | New (deduplicated) transcript chunk |
-| `FACTCHECK` | `Array<{claim, verdict, confidence, reasoning, sources}>` | Fact-check results |
-| `BIAS` | `{lean_score, emotion_score, framing_label}` | Bias analysis result |
-| `ERROR` | `string` | Human-readable error to display in the panel |
-
-Internal messages (background ↔ offscreen, silently ignored by sidebar):
-
-| Type | Direction | Description |
-|------|-----------|-------------|
-| `START_RECORDING` | background → offscreen | Begin capture with stream ID |
-| `STOP_RECORDING` | background → offscreen | Stop capture and release resources |
-| `AUDIO_CHUNK` | offscreen → background | Base64-encoded audio blob |
-| `GET_STATUS` | sidebar → background | Request current session state on panel load |
-
-## Fact-Check Pipeline
-
-```
-Rolling buffer (150 words) → POST /factcheck
-    │
-    ▼ Groq llama-3.3-70b (temperature 0.1)
-Extract up to 3 verifiable claims
-    │
-    ▼ For each claim:
-    ├─ Cache hit? → return instantly (1-hour TTL)
-    └─ Cache miss:
-        ├─ Tavily advanced search (5 results)
-        ├─ Groq verdict call (grounded in search results only)
-        └─ Cache result → return to sidebar
-```
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | Basic server health check. |
+| `GET /status` | Provider status, call counts, and budget state. |
+| `POST /transcribe` | Sends one audio blob to Groq Whisper. Used by the extension when captions are unavailable. |
+| `POST /coverage` | Identifies the story, checks coverage, gates low-confidence matches, and extracts missing context. |
+| `POST /coverage/feedback` | Handles helpful/not-helpful feedback. Not-helpful evicts cached coverage for that query. |
+| `POST /factcheck` | Extracts up to two checkable claims and verifies them with Tavily plus Groq. |
+| `POST /discussion` | Searches and summarizes public reaction separately from verified reporting. |
 
 ## API Keys
 
-All keys live in `backend/.env` — never in the extension. The extension only ever talks to `localhost:3001`.
+Keys can come from backend environment variables or per-request override headers.
 
-| Key | Service | Used for |
-|-----|---------|----------|
-| `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) | Whisper transcription + LLM fact-check + bias |
-| `TAVILY_API_KEY` | [app.tavily.com](https://app.tavily.com) | Web search for claim verification |
+| Header | Environment fallback | Used for |
+|---|---|---|
+| `X-Groq-Key` | `GROQ_API_KEY` | Story ID, synthesis, transcription, statement verdicts, discussion summaries. |
+| `X-Tavily-Key` | `TAVILY_API_KEY` | Statement checks and public reaction search. |
+| `X-Newsapi-Key` | `NEWSAPI_KEY` | Coverage comparison and missing-context notes. |
 
-## Sprint Status
+Header keys take priority over `.env`. The server never sends environment keys to the browser.
 
-| Sprint | Goal | Status |
-|--------|------|--------|
-| 1 | Scaffold, extension shell, sidebar UI, backend stubs | ✅ Done |
-| 2 | Real audio capture (offscreen doc), Groq Whisper, audio passthrough | ✅ Done |
-| 3 | Groq LLM fact-checking + Tavily, bias analysis, rolling buffer, claim cache, Spanish support | ✅ Done |
-| 4 | UI polish, packaging | ⏳ Pending |
-| 5 | Error handling, performance tuning, final packaging | ⏳ Pending |
+## Extension Data Flow
+
+1. The viewer opens the side panel and presses **Start**.
+2. `background.js` starts a session and creates the offscreen document when audio capture is needed.
+3. `content.js` collects captions, page title, headlines, metadata, and pause/resume state.
+4. `offscreen.js` keeps a short local audio ring buffer and sends audio chunks back to the service worker.
+5. The service worker prefers captions, falls back to `/transcribe`, then calls `/coverage`.
+6. A confident automatic note stops the session; unclear matches retry up to the configured attempt limit.
+7. Follow-up statement and public-reaction checks are triggered by explicit user actions.
+
+## Web Studio Data Flow
+
+1. The visitor enters or loads sample content.
+2. The page calls `/coverage` with transcript, page title, on-screen text, source domain, and language.
+3. Results render in separate sections for story match, missing context, and other coverage.
+4. Follow-up buttons stay disabled until a note exists.
+5. Developer settings can override the backend URL and provider keys for testing.
+
+The web studio stores those override settings in browser `localStorage` to preserve the existing prototype behavior.
+
+## Trust Boundaries
+
+- Raw audio stays local to the extension ring buffer unless the viewer triggers a note that needs transcription.
+- The web studio does not capture audio or inspect another tab.
+- Raw transcripts are not stored by the backend.
+- Coverage and claim caches are in memory and reset on backend restart.
+- Public reaction is labeled separately from reporting and factual evidence.
+- Persistent reports, dashboards, authentication, and public/community features are future phases.

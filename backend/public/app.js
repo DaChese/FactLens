@@ -1,6 +1,8 @@
 (function () {
   'use strict';
 
+  const SETTINGS_KEY = 'factlens-web-settings';
+
   const els = {
     status: document.getElementById('status-pill'),
     backendUrl: document.getElementById('backend-url'),
@@ -12,9 +14,10 @@
     outlet: document.getElementById('outlet'),
     screenText: document.getElementById('screen-text'),
     language: document.getElementById('language'),
+    form: document.getElementById('analysis-form'),
     buildBtn: document.getElementById('build-btn'),
     clearBtn: document.getElementById('clear-btn'),
-    sampleBtn: document.getElementById('sample-btn'),
+    sampleList: document.getElementById('sample-list'),
     claimsBtn: document.getElementById('claims-btn'),
     discussionBtn: document.getElementById('discussion-btn'),
     refreshStatusBtn: document.getElementById('refresh-status-btn'),
@@ -24,19 +27,30 @@
   };
 
   const state = {
-    note: null,
-    transcript: '',
-    language: 'english',
+    currentInput: null,
+    currentNote: null,
+    coverageStatus: 'idle',
+    factcheckStatus: 'idle',
+    discussionStatus: 'idle',
+    providerStatus: null,
   };
 
-  const saved = JSON.parse(localStorage.getItem('factlens-web-settings') || '{}');
+  const saved = readSettings();
   els.backendUrl.value = saved.backendUrl || window.location.origin;
   els.groqKey.value = saved.groqKey || '';
   els.tavilyKey.value = saved.tavilyKey || '';
   els.newsKey.value = saved.newsKey || '';
 
+  function readSettings() {
+    try {
+      return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
   function saveSettings() {
-    localStorage.setItem('factlens-web-settings', JSON.stringify({
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       backendUrl: cleanBackendUrl(),
       groqKey: els.groqKey.value.trim(),
       tavilyKey: els.tavilyKey.value.trim(),
@@ -56,51 +70,153 @@
     return headers;
   }
 
-  async function api(path, options = {}) {
+  async function requestJson(path, options = {}) {
     saveSettings();
-    const res = await fetch(`${cleanBackendUrl()}${path}`, {
-      ...options,
-      headers: {
-        ...(options.headers || {}),
-        ...keyHeaders(),
-      },
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || res.statusText || `HTTP ${res.status}`);
+    let response;
+    try {
+      response = await fetch(`${cleanBackendUrl()}${path}`, {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          ...keyHeaders(),
+        },
+      });
+    } catch (err) {
+      throw friendlyError(err, 'network');
     }
-    return res.json();
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const err = new Error(body.error || response.statusText || `HTTP ${response.status}`);
+      err.status = response.status;
+      throw friendlyError(err, 'http');
+    }
+    return body;
+  }
+
+  function friendlyError(err, kind) {
+    const message = err.message || '';
+    if (kind === 'network') {
+      return new Error('Network failure. Check that the backend URL is correct and the Railway service is awake.');
+    }
+    if (err.status === 429 || /budget|rate/i.test(message)) {
+      return new Error('Rate limit reached. Wait a minute, then try again.');
+    }
+    if (/No Groq API key/i.test(message)) {
+      return new Error('Missing Groq key. Add one in Developer settings or set it in the backend environment.');
+    }
+    if (/No Tavily API key/i.test(message)) {
+      return new Error('Missing Tavily key. Add one before checking statements or public reaction.');
+    }
+    if (/Request body must include/i.test(message)) {
+      return new Error('Add a transcript, headline, or visible text before building a note.');
+    }
+    if (/NewsAPI/i.test(message) && /key/i.test(message)) {
+      return new Error('Missing NewsAPI key. Add one to enable coverage comparison.');
+    }
+    return new Error(message || 'The request failed. Check Developer settings for provider status.');
   }
 
   function setActivity(text) {
     els.activity.textContent = text;
   }
 
-  function setBusy(button, busy, busyText, readyText) {
+  function setStatus(text, className) {
+    els.status.textContent = text;
+    els.status.className = `status-pill ${className || ''}`.trim();
+  }
+
+  function setButtonBusy(button, busy, busyText, readyText) {
     button.disabled = busy;
     button.textContent = busy ? busyText : readyText;
+    button.setAttribute('aria-busy', String(busy));
   }
 
-  function escapeText(text) {
-    return String(text ?? '').replace(/[&<>"']/g, (char) => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    }[char]));
+  function collectInput() {
+    return {
+      transcript: els.transcript.value.trim(),
+      pageTitle: els.pageTitle.value.trim(),
+      onScreenText: els.screenText.value.trim(),
+      outlet: els.outlet.value.trim(),
+      language: els.language.value,
+    };
   }
 
-  function link(url, text) {
-    const safeUrl = escapeText(url);
-    return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${escapeText(text || url)}</a>`;
+  function hasEnoughInput(input) {
+    return Boolean(input.transcript || input.pageTitle || input.onScreenText);
+  }
+
+  function normalizeNote(raw) {
+    return {
+      available: raw.available !== false,
+      story: raw.story || null,
+      query: raw.query || null,
+      confidence: raw.confidence || null,
+      matchedOn: Array.isArray(raw.matched_on) ? raw.matched_on : [],
+      lowConfidence: Boolean(raw.low_confidence),
+      articles: Array.isArray(raw.articles) ? raw.articles : [],
+      coverage: raw.coverage || null,
+      missingContext: Array.isArray(raw.missing_context) ? raw.missing_context : [],
+      outletBias: raw.outlet_bias || null,
+      claims: null,
+      discussion: null,
+    };
+  }
+
+  function normalizeClaims(raw) {
+    if (!Array.isArray(raw)) return [];
+    return raw.map((claim) => ({
+      claim: claim.claim || 'Not available',
+      verdict: claim.verdict || 'Unverified',
+      reasoning: claim.reasoning || '',
+      sources: Array.isArray(claim.sources) ? claim.sources : [],
+    }));
+  }
+
+  function normalizeDiscussion(raw) {
+    return {
+      available: raw.available !== false,
+      summary: raw.summary || null,
+      sources: Array.isArray(raw.sources) ? raw.sources : [],
+    };
+  }
+
+  function clearNode(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+
+  function append(parent, ...children) {
+    children.filter(Boolean).forEach((child) => parent.appendChild(child));
+    return parent;
+  }
+
+  function sourceLink(url, text) {
+    const link = document.createElement('a');
+    try {
+      const parsed = new URL(url);
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Unsupported URL');
+      link.href = parsed.href;
+      link.textContent = text || parsed.hostname.replace(/^www\./, '');
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      return link;
+    } catch {
+      return el('span', null, text || 'Source unavailable');
+    }
   }
 
   function domainLabel(url) {
     try {
       return new URL(url).hostname.replace(/^www\./, '');
     } catch {
-      return url;
+      return 'source';
     }
   }
 
@@ -115,230 +231,386 @@
     })[value] || value || 'unrated';
   }
 
+  function verdictLabel(value) {
+    return value === 'True' ? 'Confirmed' : value === 'False' ? 'Disputed' : 'Unclear';
+  }
+
+  function renderEmpty(text) {
+    clearNode(els.note);
+    els.note.appendChild(el('p', 'placeholder', text));
+    syncFollowups();
+  }
+
   function renderNote() {
-    const note = state.note;
+    const note = state.currentNote;
     if (!note) {
-      els.note.innerHTML = '<p class="placeholder">Build a note to see story context, coverage spread, and follow-up checks.</p>';
-      els.claimsBtn.disabled = true;
-      els.discussionBtn.disabled = true;
+      renderEmpty('Build a note to see story context, coverage, and follow-up checks.');
       return;
     }
 
-    if (note.available === false) {
-      els.note.innerHTML = '<p class="placeholder">Coverage comparison is disabled. Add a NewsAPI key in Railway or in the API key overrides.</p>';
-      els.claimsBtn.disabled = !state.transcript.trim();
-      els.discussionBtn.disabled = true;
+    clearNode(els.note);
+
+    if (!note.available) {
+      append(els.note,
+        el('h3', null, 'Coverage comparison unavailable'),
+        el('p', 'placeholder', 'Add a NewsAPI key in Developer settings or set NEWSAPI_KEY in the backend environment.')
+      );
+      syncFollowups();
       return;
     }
 
     if (!note.story) {
-      els.note.innerHTML = '<p class="placeholder">No clear news story was identified from the provided text yet.</p>';
-      els.claimsBtn.disabled = true;
-      els.discussionBtn.disabled = true;
+      append(els.note,
+        el('h3', null, 'No clear story identified'),
+        el('p', 'placeholder', 'FactLens needs more transcript, a clearer headline, or visible page text before it can build a useful note.')
+      );
+      syncFollowups();
       return;
     }
 
-    const matched = note.matched_on?.length
-      ? `Matched on: ${escapeText(note.matched_on.join(', '))}${note.confidence ? ` · ${escapeText(note.confidence)} confidence` : ''}`
-      : note.low_confidence
-        ? 'Low-confidence story match'
-        : '';
+    const storySection = el('section', note.lowConfidence ? 'result-section low-confidence' : 'result-section');
+    append(storySection, el('h3', null, 'Identified story'));
+    storySection.appendChild(el('p', 'story-title', note.story));
+    if (note.query) storySection.appendChild(el('p', 'note-meta', `Search query: ${note.query}`));
+    storySection.appendChild(el('p', 'note-meta', storyMatchText(note)));
+    if (note.outletBias) {
+      storySection.appendChild(el('p', 'note-meta', `Watched source: ${note.outletBias.name} (${biasLabel(note.outletBias.rating)})`));
+    }
+    els.note.appendChild(storySection);
 
-    const contextItems = (note.missing_context || []).map((item) => {
-      const text = typeof item === 'string' ? item : item.text;
-      const source = item?.url ? ` ${link(item.url, `(${item.outlet || 'source'})`)}` : '';
-      return `<li>${escapeText(text)}${source}</li>`;
-    }).join('');
+    renderMissingContext(note);
+    renderCoverage(note);
+    if (note.claims) renderClaims(note.claims);
+    if (note.discussion) renderDiscussion(note.discussion);
+    syncFollowups();
+  }
 
-    const articles = (note.articles || []).map((article) =>
-      link(article.url, `${article.outlet}${article.bias ? ` (${biasLabel(article.bias)})` : ''}`)
-    ).join(' · ');
+  function storyMatchText(note) {
+    if (note.lowConfidence) {
+      return 'Story match status: low confidence. Coverage and missing context may be withheld until more evidence is available.';
+    }
+    const signals = note.matchedOn.length ? note.matchedOn.join(', ') : 'Not available';
+    const confidence = note.confidence ? `${note.confidence} confidence` : 'confidence not available';
+    return `Story match status: ${confidence}. Signals used: ${signals}.`;
+  }
 
-    const coverage = note.coverage
-      ? `<p class="note-summary">${note.coverage.total} outlet${note.coverage.total === 1 ? '' : 's'} found: ` +
-        `${(note.coverage.left || 0) + (note.coverage['lean-left'] || 0)} left-leaning, ` +
-        `${note.coverage.center || 0} center, ` +
-        `${(note.coverage.right || 0) + (note.coverage['lean-right'] || 0)} right-leaning.</p>`
-      : '';
+  function renderMissingContext(note) {
+    const section = el('section', 'result-section');
+    append(section, el('h3', null, 'Missing context'));
+    if (note.lowConfidence) {
+      section.appendChild(el('p', 'placeholder', 'The story match was not confident enough to show missing context.'));
+    } else if (note.missingContext.length === 0) {
+      section.appendChild(el('p', 'placeholder', 'No additional context returned.'));
+    } else {
+      const list = el('ul', 'context-list');
+      note.missingContext.forEach((item) => {
+        const text = typeof item === 'string' ? item : item.text;
+        const li = el('li');
+        li.appendChild(el('span', null, text || 'Not available'));
+        if (item && item.url) {
+          li.appendChild(document.createTextNode(' '));
+          li.appendChild(sourceLink(item.url, item.outlet || domainLabel(item.url)));
+        }
+        list.appendChild(li);
+      });
+      section.appendChild(list);
+    }
+    els.note.appendChild(section);
+  }
 
-    const outletBias = note.outlet_bias
-      ? `<p class="note-summary"><span class="tag">Watching</span>${escapeText(note.outlet_bias.name)} (${escapeText(biasLabel(note.outlet_bias.rating))})</p>`
-      : '';
+  function renderCoverage(note) {
+    const section = el('section', 'result-section');
+    append(section, el('h3', null, 'Other coverage'));
+    if (note.lowConfidence) {
+      section.appendChild(el('p', 'placeholder', 'Coverage is withheld for low-confidence matches.'));
+    } else if (note.articles.length === 0) {
+      section.appendChild(el('p', 'placeholder', 'No other outlet coverage returned.'));
+    } else {
+      if (note.coverage) {
+        section.appendChild(el('p', 'note-meta', coverageSummary(note.coverage)));
+      }
+      const list = el('ul', 'article-list');
+      note.articles.forEach((article) => {
+        const li = el('li');
+        const title = article.title || `${article.outlet || 'Source'} article`;
+        li.appendChild(sourceLink(article.url, title));
+        li.appendChild(el('span', 'source-meta', `${article.outlet || domainLabel(article.url)} · ${biasLabel(article.bias)}`));
+        list.appendChild(li);
+      });
+      section.appendChild(list);
+    }
+    els.note.appendChild(section);
+  }
 
-    els.note.innerHTML = `
-      <div class="${note.low_confidence ? 'low-confidence' : ''}">
-        <h3>${escapeText(note.story)}</h3>
-        <p class="note-meta">${matched}</p>
-      </div>
-      ${outletBias}
-      ${contextItems ? `<h4>Readers on other outlets also saw</h4><ul>${contextItems}</ul>` : ''}
-      ${(note.articles || []).length ? `<h4>Who else is covering this</h4>${coverage}<p class="note-outlets">${articles}</p>` : ''}
-      ${note.claimsHtml || ''}
-      ${note.discussionHtml || ''}
-    `;
+  function coverageSummary(coverage) {
+    const left = (coverage.left || 0) + (coverage['lean-left'] || 0);
+    const right = (coverage.right || 0) + (coverage['lean-right'] || 0);
+    return `${coverage.total || 0} outlet${coverage.total === 1 ? '' : 's'} found: ${left} left or lean-left, ${coverage.center || 0} center, ${right} right or lean-right, ${coverage.unrated || 0} unrated.`;
+  }
 
-    els.claimsBtn.disabled = !state.transcript.trim();
-    els.discussionBtn.disabled = !note.query;
+  function renderClaims(claims) {
+    const section = el('section', 'result-section followup-result');
+    append(section, el('h3', null, 'Statement checks'));
+    if (claims.length === 0) {
+      section.appendChild(el('p', 'placeholder', 'No specific checkable statements were found.'));
+    } else {
+      const list = el('ul', 'claim-list');
+      claims.forEach((claim) => {
+        const li = el('li');
+        append(li,
+          el('span', `tag tag-${verdictLabel(claim.verdict).toLowerCase()}`, verdictLabel(claim.verdict)),
+          el('p', 'claim-text', claim.claim)
+        );
+        if (claim.reasoning) li.appendChild(el('p', 'note-meta', claim.reasoning));
+        if (claim.sources.length) {
+          const sources = el('p', 'source-row', 'Sources: ');
+          claim.sources.forEach((url, index) => {
+            if (index > 0) sources.appendChild(document.createTextNode(', '));
+            sources.appendChild(sourceLink(url, domainLabel(url)));
+          });
+          li.appendChild(sources);
+        }
+        list.appendChild(li);
+      });
+      section.appendChild(list);
+    }
+    els.note.appendChild(section);
+  }
+
+  function renderDiscussion(discussion) {
+    const section = el('section', 'result-section followup-result');
+    append(section, el('h3', null, 'Public reaction'));
+    if (!discussion.available) {
+      section.appendChild(el('p', 'placeholder', 'Add a Tavily key before checking public reaction.'));
+    } else if (!discussion.summary) {
+      section.appendChild(el('p', 'placeholder', 'Not enough public discussion found to summarize yet.'));
+    } else {
+      section.appendChild(el('p', 'note-summary', discussion.summary));
+      if (discussion.sources.length) {
+        const sources = el('p', 'source-row', 'Sources: ');
+        discussion.sources.forEach((source, index) => {
+          if (index > 0) sources.appendChild(document.createTextNode(', '));
+          sources.appendChild(sourceLink(source.url, source.title || domainLabel(source.url)));
+        });
+        section.appendChild(sources);
+      }
+    }
+    els.note.appendChild(section);
+  }
+
+  function syncFollowups() {
+    const hasNote = Boolean(state.currentNote?.story);
+    const hasTranscript = Boolean(state.currentInput?.transcript);
+    els.claimsBtn.disabled = !hasNote || !hasTranscript || state.factcheckStatus === 'loading';
+    els.discussionBtn.disabled = !hasNote || !state.currentNote?.query || state.discussionStatus === 'loading';
   }
 
   async function checkHealth() {
     try {
-      await api('/health');
-      els.status.textContent = 'Backend online';
-      els.status.className = 'status ok';
+      await requestJson('/health');
+      setStatus('Backend online', 'ok');
     } catch (err) {
-      els.status.textContent = 'Backend offline';
-      els.status.className = 'status error';
+      setStatus('Backend offline', 'error');
       setActivity(err.message);
     }
   }
 
-  async function buildNote() {
-    const transcript = els.transcript.value.trim();
-    const pageTitle = els.pageTitle.value.trim();
-    const onScreenText = els.screenText.value.trim();
-    if (!transcript && !pageTitle && !onScreenText) {
-      setActivity('Add a transcript, page title, or on-screen text first.');
+  async function buildNote(event) {
+    event.preventDefault();
+    const input = collectInput();
+    if (!hasEnoughInput(input)) {
+      state.coverageStatus = 'invalid';
+      renderEmpty('Add a transcript, headline, or visible text before building a note.');
+      setActivity('Add content first.');
       return;
     }
 
-    setBusy(els.buildBtn, true, 'Building...', 'Build Community Note');
+    state.currentInput = input;
+    state.currentNote = null;
+    state.coverageStatus = 'loading';
+    state.factcheckStatus = 'idle';
+    state.discussionStatus = 'idle';
+    renderEmpty('Identifying the story and checking coverage...');
+    setButtonBusy(els.buildBtn, true, 'Building note...', 'Build Community Note');
     setActivity('Identifying the story and checking coverage...');
-    state.transcript = transcript;
-    state.language = els.language.value;
 
     try {
-      state.note = await api('/coverage', {
+      const raw = await requestJson('/coverage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transcript,
-          language: els.language.value,
-          outlet: els.outlet.value.trim() || null,
-          pageTitle: pageTitle || null,
-          onScreenText: onScreenText || null,
+          transcript: input.transcript,
+          language: input.language,
+          outlet: input.outlet || null,
+          pageTitle: input.pageTitle || null,
+          onScreenText: input.onScreenText || null,
         }),
       });
-      setActivity(state.note.story ? 'Note ready.' : 'No clear story identified.');
+      state.currentNote = normalizeNote(raw);
+      state.coverageStatus = state.currentNote.lowConfidence ? 'low-confidence' : 'complete';
+      setActivity(state.currentNote.story ? 'Community Note ready.' : 'No clear story identified.');
       renderNote();
+      els.note.focus();
     } catch (err) {
-      setActivity(err.message);
+      state.coverageStatus = 'error';
+      renderEmpty(err.message);
+      setActivity('Could not build the note.');
     } finally {
-      setBusy(els.buildBtn, false, 'Building...', 'Build Community Note');
+      setButtonBusy(els.buildBtn, false, 'Building note...', 'Build Community Note');
     }
   }
 
   async function checkClaims() {
-    if (!state.transcript.trim()) return;
-    setBusy(els.claimsBtn, true, 'Checking...', 'Check Statements');
+    if (!state.currentInput?.transcript) return;
+    state.factcheckStatus = 'loading';
+    setButtonBusy(els.claimsBtn, true, 'Checking statements...', 'Check statements');
     setActivity('Checking statements against web sources...');
+    syncFollowups();
+
     try {
-      const claims = await api('/factcheck', {
+      const raw = await requestJson('/factcheck', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript: state.transcript, language: state.language }),
+        body: JSON.stringify({ transcript: state.currentInput.transcript, language: state.currentInput.language }),
       });
-      const rows = claims.length
-        ? claims.map((claim) => `
-          <li>
-            <p><span class="tag">${escapeText(claim.verdict === 'True' ? 'Confirmed' : claim.verdict === 'False' ? 'Disputed' : 'Unclear')}</span>${escapeText(claim.claim)}</p>
-            ${claim.reasoning ? `<p class="claim-reasoning">${escapeText(claim.reasoning)}</p>` : ''}
-            ${(claim.sources || []).length ? `<p class="claim-sources">Sources: ${claim.sources.map((url) => link(url, domainLabel(url))).join(', ')}</p>` : ''}
-          </li>
-        `).join('')
-        : '<li>No specific checkable statements were found.</li>';
-      state.note.claimsHtml = `<h4>Statements checked against the web</h4><ul>${rows}</ul>`;
+      state.currentNote.claims = normalizeClaims(raw);
+      state.factcheckStatus = 'complete';
       setActivity('Statement check complete.');
       renderNote();
     } catch (err) {
+      state.factcheckStatus = 'error';
       setActivity(err.message);
     } finally {
-      setBusy(els.claimsBtn, false, 'Checking...', 'Check Statements');
+      setButtonBusy(els.claimsBtn, false, 'Checking statements...', 'Check statements');
+      syncFollowups();
     }
   }
 
   async function checkDiscussion() {
-    if (!state.note?.query) return;
-    setBusy(els.discussionBtn, true, 'Checking...', 'Check Public Reaction');
+    if (!state.currentNote?.query) return;
+    state.discussionStatus = 'loading';
+    setButtonBusy(els.discussionBtn, true, 'Checking reaction...', 'Check public reaction');
     setActivity('Searching public reaction...');
+    syncFollowups();
+
     try {
-      const discussion = await api('/discussion', {
+      const raw = await requestJson('/discussion', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: state.note.query, language: state.language }),
+        body: JSON.stringify({ query: state.currentNote.query, language: state.currentInput.language }),
       });
-      const sources = (discussion.sources || [])
-        .map((source) => link(source.url, source.title || source.url))
-        .join(' · ');
-      state.note.discussionHtml = discussion.summary
-        ? `<h4>What people are discussing</h4><p class="note-summary">${escapeText(discussion.summary)}</p>${sources ? `<p class="note-outlets">${sources}</p>` : ''}`
-        : '<h4>What people are discussing</h4><p class="note-summary">Not enough public discussion found to summarize yet.</p>';
+      state.currentNote.discussion = normalizeDiscussion(raw);
+      state.discussionStatus = 'complete';
       setActivity('Public reaction check complete.');
       renderNote();
     } catch (err) {
+      state.discussionStatus = 'error';
       setActivity(err.message);
     } finally {
-      setBusy(els.discussionBtn, false, 'Checking...', 'Check Public Reaction');
+      setButtonBusy(els.discussionBtn, false, 'Checking reaction...', 'Check public reaction');
+      syncFollowups();
     }
   }
 
   async function refreshStatus() {
-    setActivity('Loading API status...');
+    setActivity('Loading provider status...');
     try {
-      const status = await api('/status');
-      const rows = Object.entries(status.providers || {}).map(([name, provider]) => `
-        <tr>
-          <td>${escapeText(name)}</td>
-          <td>${escapeText(provider.status || 'unknown')}</td>
-          <td>${escapeText(provider.calls ?? 0)}</td>
-          <td>${escapeText(provider.lastError || '')}</td>
-        </tr>
-      `).join('');
-      els.apiStatus.hidden = false;
-      els.apiStatus.innerHTML = `
-        <h4>API Status</h4>
-        <table>
-          <thead><tr><th>Provider</th><th>Status</th><th>Calls</th><th>Last error</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="4">No provider calls yet.</td></tr>'}</tbody>
-        </table>
-      `;
-      setActivity('API status loaded.');
+      state.providerStatus = await requestJson('/status');
+      renderStatus();
+      setActivity('Provider status loaded.');
     } catch (err) {
       setActivity(err.message);
     }
   }
 
-  function loadSample() {
-    els.pageTitle.value = 'Supreme Court hears challenge to social media moderation laws';
-    els.outlet.value = 'apnews.com';
-    els.screenText.value = 'Justices weigh state laws that restrict how social media companies moderate political content.';
-    els.transcript.value = 'The Supreme Court heard arguments today over whether states can limit how large social media platforms moderate posts. Supporters of the state laws say platforms unfairly silence political viewpoints, while tech companies argue the laws violate their First Amendment right to choose what speech they host.';
-    setActivity('Sample loaded.');
+  function renderStatus() {
+    clearNode(els.apiStatus);
+    els.apiStatus.hidden = false;
+    const providers = Object.entries(state.providerStatus?.providers || {});
+    if (providers.length === 0) {
+      els.apiStatus.appendChild(el('p', 'placeholder', 'No provider calls yet.'));
+      return;
+    }
+    const table = el('table');
+    const thead = document.createElement('thead');
+    thead.innerHTML = '<tr><th>Provider</th><th>Status</th><th>Calls</th><th>Last error</th></tr>';
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    providers.forEach(([name, provider]) => {
+      const row = document.createElement('tr');
+      append(row,
+        el('td', null, name),
+        el('td', null, provider.status || 'unknown'),
+        el('td', null, String(provider.calls ?? 0)),
+        el('td', null, provider.lastError || '')
+      );
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    els.apiStatus.appendChild(table);
   }
 
-  function clearAll() {
+  function renderSamples() {
+    clearNode(els.sampleList);
+    (window.FACTLENS_SAMPLES || []).forEach((sample) => {
+      const button = el('button', 'sample-card');
+      button.type = 'button';
+      button.dataset.sampleId = sample.id;
+      append(button,
+        el('strong', null, sample.label),
+        el('span', null, sample.description)
+      );
+      els.sampleList.appendChild(button);
+    });
+  }
+
+  function loadSample(sampleId) {
+    const sample = (window.FACTLENS_SAMPLES || []).find((item) => item.id === sampleId);
+    if (!sample) return;
+    els.transcript.value = sample.transcript;
+    els.pageTitle.value = sample.pageTitle;
+    els.screenText.value = sample.screenText;
+    els.outlet.value = sample.outlet;
+    els.language.value = sample.language || 'english';
+    state.currentNote = null;
+    state.currentInput = null;
+    renderNote();
+    setActivity(`${sample.label} loaded.`);
+    els.transcript.focus();
+  }
+
+  function clearForm() {
     els.transcript.value = '';
     els.pageTitle.value = '';
     els.outlet.value = '';
     els.screenText.value = '';
-    state.note = null;
-    state.transcript = '';
+    state.currentNote = null;
+    state.currentInput = null;
+    state.coverageStatus = 'idle';
+    state.factcheckStatus = 'idle';
+    state.discussionStatus = 'idle';
     renderNote();
-    setActivity('Cleared.');
+    setActivity('Form cleared.');
+    els.transcript.focus();
   }
 
-  els.buildBtn.addEventListener('click', buildNote);
+  els.form.addEventListener('submit', buildNote);
   els.claimsBtn.addEventListener('click', checkClaims);
   els.discussionBtn.addEventListener('click', checkDiscussion);
   els.refreshStatusBtn.addEventListener('click', refreshStatus);
-  els.sampleBtn.addEventListener('click', loadSample);
-  els.clearBtn.addEventListener('click', clearAll);
-  [els.backendUrl, els.groqKey, els.tavilyKey, els.newsKey].forEach((el) => {
-    el.addEventListener('change', () => {
+  els.clearBtn.addEventListener('click', clearForm);
+  els.sampleList.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-sample-id]');
+    if (button) loadSample(button.dataset.sampleId);
+  });
+  [els.backendUrl, els.groqKey, els.tavilyKey, els.newsKey].forEach((input) => {
+    input.addEventListener('change', () => {
       saveSettings();
       checkHealth();
     });
   });
 
+  renderSamples();
+  renderNote();
   checkHealth();
 })();
