@@ -8,6 +8,83 @@ gated, monochrome, and ~98% cheaper to run.
 
 ---
 
+## v1.5.0 — Retry-until-confident, public reaction, trust fixes (2026-07-10/11)
+
+**Why:** live-testing v1.4.0 surfaced three real problems: a single miss on story
+identification meant giving up and waiting for the viewer to press Start again;
+results took a flat 20 seconds even when the page's own title already gave the story
+away; and two bugs (a tab-resolution mixup, an unhelpful "401" error) actively broke
+the "Check statements"/"Check public reaction" flow. This release is mostly fixes and
+one genuinely new feature — the tool got faster and more resilient rather than bigger.
+
+**Retry instead of giving up:**
+- **The automatic check no longer stops after one miss.** If no story can be
+  identified yet, or the consensus check flags low confidence, the session keeps
+  listening and tries again — up to 3 attempts, 15 seconds apart — instead of
+  auto-stopping on the first failure. A real success, a missing NewsAPI key, or a hard
+  error still stop immediately, since retrying those can't help.
+- **Retries build on each other, not from scratch.** Each retry hands the model its
+  own previous guess (`previousGuess` in `/coverage`) — "a previous pass tentatively
+  identified this as X, confirm/refine/correct using the fuller information now
+  available" — rather than independently re-guessing every time. Transcript
+  accumulation across attempts was already automatic (the caption buffer never resets
+  mid-session); this closes the other half of "use the old context."
+
+**Faster first results:**
+- **The check fires off page signals, not a flat 20s wait.** Page title/headline is
+  usually available within ~1 second of pressing Start; a new fast-path timer (~5s)
+  replaces the old fixed 20-second wait whenever real page signals exist, with the 20s
+  timer surviving only as a fallback for pages with no usable title at all.
+- **`/coverage` accepts page-signals-only requests** — a transcript is no longer
+  required if the page title/description clearly names a story, so the very first
+  check doesn't have to wait for any spoken audio to be transcribed.
+- **The 15-word minimum for trusting captions is gone** — any amount of caption text,
+  even a few words, is used immediately instead of being discarded until a threshold
+  is hit.
+- **Story identification uses a smaller, faster Groq model** for the lean
+  extraction step (headline + search query), with an automatic fallback to the
+  full model if that model name isn't available.
+
+**Broader page-signal scraping:** on top of `<h1>`/Open Graph, the content script now
+reads JSON-LD structured data (`Article`/`NewsArticle`/`VideoObject` schema — what
+most professional news and video sites already embed for SEO), Twitter Card meta
+tags, and `itemprop="headline"` microdata — standards-based signals that travel
+across platforms instead of depending on one site's DOM structure.
+
+**"What people are discussing" (new):** a third on-demand action on the note, "Check
+public reaction" — searches (Tavily, reusing the note's story query) for public
+discussion/reaction and summarizes its tenor, explicitly instructed to describe
+opinions as opinions and never fabricate a quote. Kept in its own labeled section,
+never blended with the outlet coverage above it. Explicitly *not* a reimplementation
+of X/Meta's real Community Notes mechanism (which filters crowd-submitted ratings) —
+documented as "inspired by, not the same as."
+
+**Thumbs up / thumbs down on a note:** rates the story identification specifically.
+Thumbs down dismisses the note immediately and evicts that story from the backend's
+cache, so a repeat check doesn't silently reuse the same wrong result. Thumbs up is a
+lightweight, honest acknowledgment only — no functional effect on future checks, no
+pretending it "trains" anything.
+
+**Pause-aware checking:** the content script reports when the page's video pauses or
+resumes; the pending automatic check is cancelled while paused (nothing to check
+against a stale moment) and re-armed on resume, so a paused video can't silently burn
+an API call.
+
+**Reliability fixes:**
+- **Fixed a real bug** where "Check statements" and "Check public reaction" failed
+  with "Build a note first" even right after a note was built — caused by resolving
+  the target tab through `chrome.tabs.query({currentWindow: true})`, which is
+  ambiguous when called from a service worker. Now resolved from the note data itself.
+- **Error banners show the real reason, not a bare status code** — e.g. "401 Invalid
+  API Key — check your API keys in Settings" instead of "/coverage returned 401" —
+  across every backend call.
+- **In-panel Start button**, colored green; Stop stays red — the one deliberate
+  exception to the monochrome design, for universal go/stop signaling. Opening the
+  panel no longer auto-starts a session; only the Start button does.
+- **Live activity log** under the Community Notes header shows real, specific
+  progress ("Reading 47 words from captions," "Got a 62-word transcript — identifying
+  the story…") instead of a blank wait or a generic label.
+
 ## v1.4.0 — On-demand architecture, API safety (2026-07-09/10)
 
 **Why:** API credits were being burned continuously whether anyone was looking or not

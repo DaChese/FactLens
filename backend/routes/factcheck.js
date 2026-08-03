@@ -91,6 +91,13 @@ A good claim:
 - Is specific enough to search for (not vague or subjective)
 - Is NOT an opinion, prediction, joke, or rhetorical question
 
+If you return 2 claims, they must be about DIFFERENT facts — never two phrasings or
+angles of the same underlying fact or event. For example, "a public figure died" and
+"that same death occurred on a specific date at a specific place" are restating one
+fact, not two; pick the single clearest phrasing of it instead of both. Two claims are
+only both worth including if a reader could disagree with one while agreeing with the
+other.
+
 Bad examples (do NOT include):
 - "He doesn't care about legality" (opinion)
 - "Things are getting worse" (vague)

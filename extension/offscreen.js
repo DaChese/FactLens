@@ -8,7 +8,7 @@
  * Audio pipeline (on-demand — nothing is sent anywhere on a timer):
  *  - MediaRecorder fires ondataavailable every TIMESLICE_MS (500ms)
  *  - Raw data chunks are kept in a rolling ring buffer holding the last
- *    RING_SIZE slots (~90 seconds of audio)
+ *    RING_SIZE slots (~60 seconds of audio)
  *  - Recording costs nothing — audio only leaves this document when the
  *    service worker sends REQUEST_AUDIO (the viewer pressed "Check now"),
  *    at which point the whole ring is assembled into ONE blob and sent
@@ -30,8 +30,10 @@ const TIMESLICE_MS = 500;
 
 // How many timeslice chunks to keep in the ring buffer.
 // RING_SIZE * TIMESLICE_MS = the audio window sent to Whisper on request.
-// 180 * 500ms = the last 90 seconds — enough context for a full note.
-const RING_SIZE = 180;
+// 120 * 500ms = the last 60 seconds — enough context for a segment's story,
+// while keeping Whisper's upload/transcription time (the single biggest
+// latency source when captions aren't available) shorter.
+const RING_SIZE = 120;
 
 let mediaRecorder = null;
 let audioContext  = null;

@@ -2,12 +2,15 @@
  * routes/coverage.js — Coverage & Missing-Context Route
  *
  * POST /coverage
- *  Body: { transcript, language?, outlet?, pageTitle?, onScreenText? }
- *   - transcript:   rolling transcript buffer from the extension
- *   - outlet:       hostname of the tab being watched — used to look up the
- *                   current outlet's own bias rating
- *   - pageTitle:    document.title of the watched page (story cross-check signal)
- *   - onScreenText: headline / og:title / image captions scraped from the page
+ *  Body: { transcript, language?, outlet?, pageTitle?, onScreenText?, previousGuess? }
+ *   - transcript:    rolling transcript buffer from the extension
+ *   - outlet:        hostname of the tab being watched — used to look up the
+ *                    current outlet's own bias rating
+ *   - pageTitle:     document.title of the watched page (story cross-check signal)
+ *   - onScreenText:  headline / og:title / image captions scraped from the page
+ *   - previousGuess: { story, query } from an earlier attempt this session, when
+ *                    this is a retry — the model treats it as a hypothesis to
+ *                    confirm/refine/correct, not a fact to defer to
  *
  *  Pipeline:
  *   1. Send transcript + on-screen text to Groq to identify the story + search query
@@ -23,6 +26,7 @@
  *  {
  *    available:       boolean,          // false when NEWSAPI_KEY is not set
  *    story:           string | null,    // short headline of the identified story
+ *    query:           string | null,    // search query used — reusable by /discussion
  *    confidence:      "high" | "medium" | "low",
  *    matched_on:      string[],         // which signals agreed (visible evidence)
  *    low_confidence:  boolean,          // true → articles/context withheld
@@ -31,6 +35,12 @@
  *    missing_context: string[],         // facts other outlets report that this segment omits
  *    outlet_bias:     { name, rating } | null   // rating of the outlet being watched
  *  }
+ *
+ * POST /coverage/feedback
+ *  Body: { query: string, helpful: boolean }
+ *  Thumbs up/down on a note's story identification. Thumbs down evicts that
+ *  query's cached coverage so a repeat check doesn't reuse the same wrong
+ *  result. Not a learning system — nothing is retrained or scored.
  */
 
 import { Router } from 'express';
@@ -44,8 +54,14 @@ import { spendBudget } from '../lib/rateLimit.js';
 
 const router = Router();
 
-const MODEL     = 'llama-3.3-70b-versatile';
-const MAX_CHARS = 4000;
+const MODEL      = 'llama-3.3-70b-versatile';
+// Story identification is a lean extraction task (headline + a few keywords),
+// not deep reasoning — a smaller/faster model cuts real latency off the
+// slowest step of "Check now" without hurting the harder synthesis work
+// below, which stays on the bigger model. (If this model name ever 404s,
+// swap it for whatever Groq's current small/fast tier is called.)
+const FAST_MODEL = 'llama-3.1-8b-instant';
+const MAX_CHARS  = 4000;
 
 // ─── Bias Ratings Lookup ─────────────────────────────────────────────────────
 // Loaded once at startup. Index by both normalised outlet name and domain so we
@@ -133,14 +149,28 @@ You are a news analysis assistant. Given a transcript excerpt from a live broadc
 and possibly on-screen text from the page it is playing on (page title, headline,
 image captions), identify the single main news story being discussed.
 
+The transcript may be short, empty, or absent — captions/speech may not have caught up
+yet. When that happens, identify the story from the on-screen text alone; a page title
+or headline is often a complete, reliable signal by itself. Do NOT return null just
+because the transcript is thin or missing — a clear page title or headline is enough
+on its own. Only return null when NEITHER the transcript NOR the on-screen text
+points to an identifiable story.
+
 Rules:
 - "story" is a short, neutral headline (under 12 words) describing the story
-- Weigh the on-screen text heavily when present — a page title or headline usually
-  names the story directly, while transcripts can wander
+- Weigh the on-screen text heavily — a page title or headline usually names the story
+  directly and is more reliable than a partial or wandering transcript. If on-screen
+  text clearly names a story, use it even if the transcript is empty, unclear, or
+  seems to be about something else (the transcript may just not have caught up yet)
 - "query" is a 3-6 keyword web search query that would find other news articles
   about this same story (names, places, events — no filler words)
-- If the content is not an identifiable news story (e.g. small talk, ads, music,
-  sports commentary without a news angle), return {"story": null}
+- If there is neither a usable transcript nor usable on-screen text, or neither
+  points to an identifiable news story (e.g. small talk, ads, music, sports
+  commentary without a news angle), return {"story": null}
+- You may be given a previous tentative guess from an earlier pass that had less
+  information available. Treat it as a hypothesis to confirm, refine, or correct
+  with the fuller information you have now — not as a fact to defer to. If the new
+  information points somewhere else, say so; don't just repeat the old guess
 - Return ONLY a valid JSON object — no markdown, no explanation
 
 Output format:
@@ -180,23 +210,45 @@ function stripFences(raw) {
 
 /**
  * Ask Groq to identify the main story + search query in the transcript,
- * optionally cross-referencing on-screen text scraped from the page.
+ * optionally cross-referencing on-screen text scraped from the page and a
+ * previous attempt's tentative guess (when this is a retry with more
+ * information than the last pass had).
  * @returns {{ story: string, query: string } | null}
  */
-async function identifyStory(groq, transcript, onScreenText, replyLanguage) {
+async function identifyStory(groq, transcript, onScreenText, replyLanguage, previousGuess = null) {
   const screenBlock = onScreenText
     ? `\n\nOn-screen text from the page:\n${onScreenText.slice(0, 600)}`
     : '';
+  const transcriptBlock = transcript
+    ? `Transcript (language: ${replyLanguage}):\n${transcript}`
+    : 'Transcript: (none yet — nothing has been transcribed so far)';
+  const previousGuessBlock = previousGuess?.story
+    ? `\n\nA previous pass, with less information available, tentatively guessed this story was about: "${previousGuess.story}" (search terms: "${previousGuess.query ?? ''}"). Confirm, refine, or correct this using the fuller information above.`
+    : '';
 
-  const response = await recordCall('groq', groq.chat.completions.create({
-    model:       MODEL,
+  const callArgs = {
     max_tokens:  128,
     temperature: 0.1,
     messages: [
       { role: 'system', content: STORY_SYSTEM_PROMPT },
-      { role: 'user',   content: `Transcript (language: ${replyLanguage}):\n${transcript}${screenBlock}` },
+      { role: 'user',   content: `${transcriptBlock}${screenBlock}${previousGuessBlock}` },
     ],
-  }));
+  };
+
+  let response;
+  try {
+    response = await recordCall('groq', groq.chat.completions.create({ ...callArgs, model: FAST_MODEL }));
+  } catch (err) {
+    // An invalid/unauthorized key fails identically on every model — retrying
+    // with MODEL would just double the wasted call and the wait before the
+    // real error surfaces. Only fall back when it looks like FAST_MODEL
+    // itself is the problem (e.g. an unavailable model name).
+    if (err.status === 401 || err.status === 403 || /^40[13]\b/.test(err.message || '')) {
+      throw err;
+    }
+    console.warn(`[/coverage] ${FAST_MODEL} failed (${err.message}), falling back to ${MODEL}`);
+    response = await recordCall('groq', groq.chat.completions.create({ ...callArgs, model: MODEL }));
+  }
 
   let parsed;
   try {
@@ -329,10 +381,19 @@ const MATCH_THRESHOLD = 0.3;
 
 router.post('/', async (req, res, next) => {
   try {
-    const { transcript, language = 'english', outlet = null, pageTitle = null, onScreenText = null } = req.body;
+    const { transcript, language = 'english', outlet = null, pageTitle = null, onScreenText = null, previousGuess = null } = req.body;
 
-    if (!transcript || typeof transcript !== 'string' || transcript.trim().length === 0) {
-      return res.status(400).json({ error: 'Request body must include a non-empty "transcript" string.' });
+    const hasTranscript = typeof transcript === 'string' && transcript.trim().length > 0;
+    const hasScreenSignals =
+      (typeof pageTitle === 'string' && pageTitle.trim().length > 0) ||
+      (typeof onScreenText === 'string' && onScreenText.trim().length > 0);
+
+    // A story can be identified from on-screen text alone (a page title is
+    // often enough) — only reject the request if there's truly nothing to
+    // work with. This is what lets the extension check the moment page
+    // signals arrive, without waiting for spoken transcript to accumulate.
+    if (!hasTranscript && !hasScreenSignals) {
+      return res.status(400).json({ error: 'Request body must include a non-empty "transcript" string, or a "pageTitle"/"onScreenText".' });
     }
 
     const outletBias = lookupWatchedOutlet(outlet);
@@ -341,7 +402,7 @@ router.post('/', async (req, res, next) => {
     // Coverage analysis is optional — degrade gracefully without a NewsAPI key.
     // The watched outlet's own rating is a local lookup, so it still works.
     if (!newsApiKey) {
-      return res.json({ available: false, story: null, articles: [], coverage: null, missing_context: [], outlet_bias: outletBias });
+      return res.json({ available: false, story: null, query: null, articles: [], coverage: null, missing_context: [], outlet_bias: outletBias });
     }
 
     const groqKey = resolveKey(req, 'X-Groq-Key', 'GROQ_API_KEY');
@@ -350,15 +411,15 @@ router.post('/', async (req, res, next) => {
     }
     const groq = getGroqClient(groqKey);
 
-    const safeTranscript = transcript.slice(0, MAX_CHARS);
+    const safeTranscript = hasTranscript ? transcript.slice(0, MAX_CHARS) : '';
     const replyLanguage  = language === 'spanish' ? 'Spanish' : 'English';
     const screenSignals  = [pageTitle, onScreenText].filter(s => s && typeof s === 'string').join('\n');
 
     // ── Step 1: Identify the story (transcript + on-screen text) ──
-    const storyInfo = await identifyStory(groq, safeTranscript, screenSignals, replyLanguage);
+    const storyInfo = await identifyStory(groq, safeTranscript, screenSignals, replyLanguage, previousGuess);
     if (!storyInfo) {
       console.log('[/coverage] No identifiable news story in transcript');
-      return res.json({ available: true, story: null, articles: [], coverage: null, missing_context: [], outlet_bias: outletBias });
+      return res.json({ available: true, story: null, query: null, articles: [], coverage: null, missing_context: [], outlet_bias: outletBias });
     }
 
     console.log(`[/coverage] Story: "${storyInfo.story}" (query: "${storyInfo.query}")`);
@@ -378,9 +439,13 @@ router.post('/', async (req, res, next) => {
     const screenMatch = screenSignals ? keywordOverlap(storyText, screenSignals) >= MATCH_THRESHOLD : null;
     const newsMatch   = articles.some(a => keywordOverlap(storyText, a.title) >= MATCH_THRESHOLD);
 
-    const matchedOn = ['audio transcript'];
-    if (screenMatch) matchedOn.push('on-screen text');
-    if (newsMatch)   matchedOn.push("other outlets' headlines");
+    // Only claim a signal actually contributed — don't list "audio transcript"
+    // when the check ran off page signals alone (e.g. the fast path, before
+    // any speech has been transcribed).
+    const matchedOn = [];
+    if (hasTranscript) matchedOn.push('audio transcript');
+    if (screenMatch)   matchedOn.push('on-screen text');
+    if (newsMatch)     matchedOn.push("other outlets' headlines");
 
     // high   = both independent signals agree with the transcript-derived story
     // medium = one agrees (or no on-screen text was available to compare)
@@ -396,9 +461,13 @@ router.post('/', async (req, res, next) => {
       console.log(`[/coverage] Low-confidence story match — withholding coverage (screenMatch=${screenMatch}, newsMatch=${newsMatch})`);
     }
 
-    // ── Step 4: Missing-context extraction (skipped for low-confidence matches) ──
+    // ── Step 4: Missing-context extraction ──
+    // Skipped for low-confidence matches, and skipped when there's no real
+    // transcript yet — "what did this segment omit" is meaningless to ask
+    // when nothing has been transcribed from it so far (the fast page-signals
+    // path can reach this point with an empty transcript).
     let missingContext = [];
-    if (!lowConfidence) {
+    if (!lowConfidence && hasTranscript) {
       missingContext = cached?.missing_context
         ?? await extractMissingContext(groq, safeTranscript, articles, replyLanguage);
     }
@@ -413,6 +482,7 @@ router.post('/', async (req, res, next) => {
     return res.json({
       available:       true,
       story:           storyInfo.story,
+      query:           storyInfo.query,
       confidence,
       matched_on:      matchedOn,
       low_confidence:  lowConfidence,
@@ -427,6 +497,32 @@ router.post('/', async (req, res, next) => {
     console.error('[/coverage] Error:', err.message);
     next(err);
   }
+});
+
+// ─── POST /coverage/feedback ──────────────────────────────────────────────────
+// Viewer feedback on a note's story identification (thumbs up/down). This is
+// deliberately NOT a learning system — nothing here retrains or scores
+// anything. Thumbs down does one concrete, honest thing: evicts that story's
+// cached coverage, so a repeat check for the same story gets a fresh lookup
+// instead of silently reusing the same wrong result. Thumbs up is
+// acknowledged and logged only.
+
+router.post('/feedback', (req, res) => {
+  const { query, helpful } = req.body;
+
+  if (!query || typeof query !== 'string' || query.trim().length === 0) {
+    return res.status(400).json({ error: 'Request body must include a non-empty "query" string.' });
+  }
+
+  if (helpful === false) {
+    const key     = query.toLowerCase().trim();
+    const removed = coverageCache.delete(key);
+    console.log(`[/coverage/feedback] Thumbs down on "${query}" — cache ${removed ? 'invalidated' : 'was already empty'}`);
+  } else {
+    console.log(`[/coverage/feedback] Thumbs up on "${query}"`);
+  }
+
+  res.json({ ok: true });
 });
 
 export default router;

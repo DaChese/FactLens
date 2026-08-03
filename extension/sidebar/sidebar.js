@@ -17,10 +17,12 @@
 
   const statusDot    = document.getElementById('fl-status-dot');
   const statusLabel  = document.getElementById('fl-status-label');
+  const startBtn     = document.getElementById('fl-start-btn');
   const stopBtn      = document.getElementById('fl-stop-btn');
   const checkBtn     = document.getElementById('fl-check-btn');
   const settingsBtn  = document.getElementById('fl-settings-btn');
   const notesList    = document.getElementById('fl-notes-list');
+  const activityLine = document.getElementById('fl-activity');
   const outletBadge  = document.getElementById('fl-outlet-badge');
   const clearNotes   = document.getElementById('fl-clear-notes');
 
@@ -48,6 +50,7 @@
   function emptyNote() {
     return {
       story:          null,
+      query:          null, // search query from /coverage — needed to rate/dismiss
       confidence:     null,
       matchedOn:      [],
       lowConfidence:  false,
@@ -56,6 +59,10 @@
       missingContext: [],
       claims:         [],
       claimsChecked:  false, // "Check statements" has been run for this note
+      discussion:        null,  // { summary, sources } from /discussion
+      discussionAvailable: true, // false once the backend reports no Tavily key
+      discussionChecked: false, // "Check public reaction" has been run for this note
+      rating:         null, // 'up' once marked helpful — 'down' dismisses the note entirely
     };
   }
 
@@ -69,12 +76,15 @@
     if (!type) return;
 
     switch (type) {
-      case 'STATUS':      updateStatus(payload);  break;
-      case 'COVERAGE':    applyCoverage(payload); break;
-      case 'FACTCHECK':   applyClaims(payload);   break;
-      case 'NOTE_DONE':   resetCheckButton();     break;
-      case 'CLAIMS_DONE': resetClaimsButton();    break;
-      case 'ERROR':       showError(payload);     break;
+      case 'STATUS':         updateStatus(payload);    break;
+      case 'PROGRESS':       showActivity(payload);    break;
+      case 'COVERAGE':       applyCoverage(payload);   break;
+      case 'FACTCHECK':      applyClaims(payload);     break;
+      case 'DISCUSSION':     applyDiscussion(payload); break;
+      case 'NOTE_DONE':      resetCheckButton();       break;
+      case 'CLAIMS_DONE':    resetClaimsButton();      break;
+      case 'DISCUSSION_DONE': resetDiscussionButton(); break;
+      case 'ERROR':          showError(payload);       break;
       case 'TRANSCRIPT':
       case 'START_RECORDING':
       case 'STOP_RECORDING':
@@ -89,6 +99,16 @@
   });
 
   // ─── Header Buttons ──────────────────────────────────────────────────────
+
+  startBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'START_SESSION' }).catch(() => {});
+    startBtn.disabled = true;
+    startBtn.textContent = 'Starting…';
+    setTimeout(() => {
+      startBtn.disabled = false;
+      startBtn.textContent = 'Start';
+    }, 3000);
+  });
 
   stopBtn.addEventListener('click', () => {
     chrome.runtime.sendMessage({ type: 'STOP_SESSION' }).catch(() => {});
@@ -129,14 +149,22 @@
 
     if (status === 'listening' || status === 'processing') {
       statusDot.classList.add(status);
+      startBtn.hidden = true;
       stopBtn.hidden = false;
       checkBtn.hidden = false;
-      showReadyHintIfEmpty();
+      if (status === 'processing') {
+        showActivity('Working…'); // immediate fallback; PROGRESS messages refine this
+      } else {
+        clearActivity();
+        showReadyHintIfEmpty();
+      }
     } else {
+      startBtn.hidden = false;
       stopBtn.hidden = true;
       checkBtn.hidden = true;
       resetCheckButton();
       removeReadyHint();
+      clearActivity();
     }
   }
 
@@ -147,13 +175,44 @@
     if (placeholder) placeholder.remove();
     const hint = document.createElement('p');
     hint.className = 'fl-ready-hint';
-    hint.textContent = 'Collecting audio and captions locally — press Check now whenever you want a note about what’s being discussed.';
+    hint.textContent = 'Listening — this will check automatically in about 20 seconds, or press Check now to check sooner.';
     notesList.appendChild(hint);
   }
 
   function removeReadyHint() {
     const hint = notesList.querySelector('.fl-ready-hint');
     if (hint) hint.remove();
+  }
+
+  // ─── Live Activity ("what the AI is doing right now") ────────────────────
+
+  let activityTimer = null;
+
+  function showActivity(text) {
+    if (!text) return;
+    removeReadyHint();
+    activityLine.hidden = false;
+    activityLine.textContent = text + ' ';
+
+    const dots = document.createElement('span');
+    dots.className = 'fl-activity-dots';
+    activityLine.appendChild(dots);
+
+    if (activityTimer) clearInterval(activityTimer);
+    let step = 0;
+    activityTimer = setInterval(() => {
+      step = (step + 1) % 4;
+      dots.textContent = '.'.repeat(step);
+    }, 400);
+  }
+
+  function clearActivity() {
+    if (activityTimer) {
+      clearInterval(activityTimer);
+      activityTimer = null;
+    }
+    activityLine.hidden = true;
+    activityLine.textContent = '';
   }
 
   // ─── Applying Results to the Note ────────────────────────────────────────
@@ -186,6 +245,7 @@
     }
 
     currentNote.story          = payload.story;
+    currentNote.query          = payload.query ?? null;
     currentNote.confidence     = payload.confidence ?? null;
     currentNote.matchedOn      = payload.matched_on ?? [];
     currentNote.lowConfidence  = !!payload.low_confidence;
@@ -208,17 +268,41 @@
     renderNotes();
   }
 
+  function applyDiscussion(payload) {
+    currentNote.discussionChecked = true;
+    currentNote.discussionAvailable = payload?.available !== false;
+    if (payload?.summary) {
+      currentNote.discussion = { summary: payload.summary, sources: payload.sources ?? [] };
+    }
+    renderNotes();
+  }
+
   function archiveCurrentNote() {
     const liveCard = notesList.querySelector('.fl-note--live');
     if (!liveCard) return;
     liveCard.classList.remove('fl-note--live');
     liveCard.classList.add('fl-note--archived');
-    // Frozen notes lose their action button
+    // Frozen notes lose their action buttons and rating controls
     liveCard.querySelector('.fl-note-actions')?.remove();
+    liveCard.querySelector('.fl-note-rating')?.remove();
 
     const archived = notesList.querySelectorAll('.fl-note--archived');
     if (archived.length > MAX_ARCHIVED_NOTES) {
       archived[archived.length - 1].remove();
+    }
+  }
+
+  /**
+   * Thumbs down: dismiss the note immediately. The story was wrong, so
+   * there's nothing worth keeping on screen — matches "just delete bad
+   * results" directly, no need to archive it first.
+   */
+  function dismissCurrentNote() {
+    const liveCard = notesList.querySelector('.fl-note--live');
+    if (liveCard) liveCard.remove();
+    currentNote = emptyNote();
+    if (!notesList.querySelector('.fl-note') && !notesList.querySelector('.fl-ready-hint')) {
+      notesList.innerHTML = PLACEHOLDER_HTML;
     }
   }
 
@@ -258,6 +342,13 @@
       meta.textContent = 'Coverage comparison disabled — add a NewsAPI key in Settings to enable it.';
     }
     parts.push(meta);
+
+    // ── Rate the story identification — the actual complaint this answers is
+    // "it wasn't the right story", so this rates that specifically, not the
+    // note's content overall ──
+    if (note.story) {
+      parts.push(buildRatingRow(note));
+    }
 
     // ── Context other outlets reported (the heart of the note) ──
     if (note.missingContext.length > 0) {
@@ -316,6 +407,40 @@
       parts.push(outlets);
     }
 
+    // ── Public discussion (separate from, never blended with, outlet coverage above) ──
+    if (note.discussion) {
+      parts.push(subheading('What people are discussing'));
+      const summary = document.createElement('p');
+      summary.className = 'fl-note-summary';
+      summary.textContent = note.discussion.summary;
+      parts.push(summary);
+
+      if (note.discussion.sources.length > 0) {
+        const srcs = document.createElement('p');
+        srcs.className = 'fl-note-outlets';
+        note.discussion.sources.forEach((s, i) => {
+          try {
+            const link = document.createElement('a');
+            link.href = s.url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.title = s.title;
+            link.textContent = new URL(s.url).hostname.replace(/^www\./, '');
+            srcs.appendChild(link);
+            if (i < note.discussion.sources.length - 1) srcs.appendChild(document.createTextNode(' · '));
+          } catch { /* skip malformed URLs */ }
+        });
+        parts.push(srcs);
+      }
+    } else if (note.discussionChecked) {
+      const none = document.createElement('p');
+      none.className = 'fl-note-summary';
+      none.textContent = note.discussionAvailable
+        ? 'Not enough public discussion found to summarize yet.'
+        : 'Public reaction search disabled — add a Tavily key in Settings to enable it.';
+      parts.push(none);
+    }
+
     // ── Checked statements ──
     if (note.claims.length > 0) {
       parts.push(subheading('Statements checked against the web'));
@@ -332,20 +457,37 @@
       parts.push(none);
     }
 
-    // ── Action: check statements (one /factcheck call, on request) ──
-    if (note.story && !note.claimsChecked) {
+    // ── Actions: check statements / public reaction (one call each, on request) ──
+    if (note.story && (!note.claimsChecked || !note.discussionChecked)) {
       const actions = document.createElement('div');
       actions.className = 'fl-note-actions';
-      const btn = document.createElement('button');
-      btn.className = 'fl-btn fl-btn--small';
-      btn.id = 'fl-claims-btn';
-      btn.textContent = 'Check statements in this segment';
-      btn.addEventListener('click', () => {
-        chrome.runtime.sendMessage({ type: 'CHECK_CLAIMS' }).catch(() => {});
-        btn.disabled = true;
-        btn.textContent = 'Checking statements…';
-      });
-      actions.appendChild(btn);
+
+      if (!note.claimsChecked) {
+        const btn = document.createElement('button');
+        btn.className = 'fl-btn fl-btn--small';
+        btn.id = 'fl-claims-btn';
+        btn.textContent = 'Check statements in this segment';
+        btn.addEventListener('click', () => {
+          chrome.runtime.sendMessage({ type: 'CHECK_CLAIMS' }).catch(() => {});
+          btn.disabled = true;
+          btn.textContent = 'Checking statements…';
+        });
+        actions.appendChild(btn);
+      }
+
+      if (!note.discussionChecked) {
+        const btn = document.createElement('button');
+        btn.className = 'fl-btn fl-btn--small';
+        btn.id = 'fl-discussion-btn';
+        btn.textContent = 'Check public reaction';
+        btn.addEventListener('click', () => {
+          chrome.runtime.sendMessage({ type: 'CHECK_DISCUSSION' }).catch(() => {});
+          btn.disabled = true;
+          btn.textContent = 'Checking public reaction…';
+        });
+        actions.appendChild(btn);
+      }
+
       parts.push(actions);
     }
 
@@ -357,6 +499,14 @@
     if (btn) {
       btn.disabled = false;
       btn.textContent = 'Check statements in this segment';
+    }
+  }
+
+  function resetDiscussionButton() {
+    const btn = document.getElementById('fl-discussion-btn');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Check public reaction';
     }
   }
 
@@ -408,6 +558,51 @@
     }
 
     return li;
+  }
+
+  /**
+   * "Right story?" — thumbs up marks the note helpful (cosmetic only, no
+   * backend effect); thumbs down dismisses it and tells the backend to
+   * forget its cached result for this story, so a repeat check doesn't
+   * reuse the same wrong answer.
+   */
+  function buildRatingRow(note) {
+    const row = document.createElement('div');
+    row.className = 'fl-note-rating';
+
+    const label = document.createElement('span');
+    label.className = 'fl-note-rating-label';
+    label.textContent = 'Right story?';
+    row.appendChild(label);
+
+    if (note.rating === 'up') {
+      const marked = document.createElement('span');
+      marked.className = 'fl-note-rating-marked';
+      marked.textContent = 'Marked helpful';
+      row.appendChild(marked);
+    } else {
+      const upBtn = document.createElement('button');
+      upBtn.className = 'fl-btn fl-btn--small';
+      upBtn.textContent = 'Helpful';
+      upBtn.addEventListener('click', () => {
+        note.rating = 'up';
+        renderNotes();
+      });
+      row.appendChild(upBtn);
+    }
+
+    const downBtn = document.createElement('button');
+    downBtn.className = 'fl-btn fl-btn--small';
+    downBtn.textContent = 'Not helpful';
+    downBtn.addEventListener('click', () => {
+      if (note.query) {
+        chrome.runtime.sendMessage({ type: 'RATE_NOTE', query: note.query, helpful: false }).catch(() => {});
+      }
+      dismissCurrentNote();
+    });
+    row.appendChild(downBtn);
+
+    return row;
   }
 
   function subheading(text) {

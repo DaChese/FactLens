@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FactLens",
-  "version": "1.4.0",
-  "description": "Community notes for live video — real-time story context, coverage comparison, and bias analysis for any browser tab.",
+  "version": "1.5.0",
+  "description": "Community notes for live video — real-time story context, coverage comparison, and public reaction for any browser tab.",
 
   "permissions": [
     "tabCapture",

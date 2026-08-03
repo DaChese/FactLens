@@ -139,6 +139,33 @@ a:hover {
   padding: 2px 8px;
 }
 
+/* Start/Stop are the one deliberate exception to the black-and-white rule —
+   go/stop is universal enough signaling to earn it. Everything else stays
+   monochrome. */
+#fl-start-btn {
+  background: #1a7a1a;
+  border-color: #1a7a1a;
+  color: #ffffff;
+}
+
+#fl-start-btn:hover:not(:disabled) {
+  background: #145c14;
+  border-color: #145c14;
+  color: #ffffff;
+}
+
+#fl-stop-btn {
+  background: #b3261e;
+  border-color: #b3261e;
+  color: #ffffff;
+}
+
+#fl-stop-btn:hover:not(:disabled) {
+  background: #8c1d17;
+  border-color: #8c1d17;
+  color: #ffffff;
+}
+
 /* ── Sections ─────────────────────────────────────────────────────────────── */
 .fl-section {
   padding: 12px 16px;
@@ -184,6 +211,24 @@ a:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px;
+}
+
+/* Live activity line — what the AI is doing right now, instead of a blank
+   wait. Shown above the notes list while a request is in flight. */
+.fl-activity {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--ink-soft);
+  padding: 6px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px dotted var(--rule-light);
+  flex-shrink: 0;
+}
+
+.fl-activity-dots {
+  display: inline-block;
+  width: 1.5em;
+  text-align: left;
 }
 
 .fl-placeholder,
@@ -272,6 +317,25 @@ a:hover {
 .fl-note-outlets {
   font-size: 12px;
   line-height: 1.8;
+}
+
+/* "Right story?" rating row */
+.fl-note-rating {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.fl-note-rating-label {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.fl-note-rating-marked {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--ink-soft);
 }
 
 /* Checked statements */

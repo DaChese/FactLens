@@ -12,10 +12,11 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 
-import transcribeRouter from './routes/transcribe.js';
-import factcheckRouter  from './routes/factcheck.js';
-import coverageRouter   from './routes/coverage.js';
-import { getStatus }    from './lib/apiStatus.js';
+import transcribeRouter  from './routes/transcribe.js';
+import factcheckRouter   from './routes/factcheck.js';
+import coverageRouter    from './routes/coverage.js';
+import discussionRouter  from './routes/discussion.js';
+import { getStatus }     from './lib/apiStatus.js';
 import { requestThrottle, getBudgets } from './lib/rateLimit.js';
 
 // ─── Startup Validation ──────────────────────────────────────────────────────
@@ -65,6 +66,7 @@ app.use(express.json());
 app.use('/transcribe', requestThrottle(10), transcribeRouter);
 app.use('/factcheck',  requestThrottle(6),  factcheckRouter);
 app.use('/coverage',   requestThrottle(6),  coverageRouter);
+app.use('/discussion', requestThrottle(6),  discussionRouter);
 
 // Health check — useful for verifying the server is up
 app.get('/health', (_req, res) => {

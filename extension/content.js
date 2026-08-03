@@ -14,9 +14,18 @@
  *    them while they're arriving and falls back to Whisper otherwise.
  *
  * 2. Page-signal scraping (top frame only). Collects the page title, main
- *    headline, and social/image metadata so the backend can cross-check that
- *    the story identified from audio matches what's actually on screen —
+ *    headline, JSON-LD structured data, Open Graph/Twitter Card metadata, and
+ *    image alt text — standards-based signals most news/video platforms embed
+ *    for SEO regardless of visual layout, so this works broadly rather than
+ *    depending on site-specific CSS selectors. Lets the backend cross-check
+ *    that the story identified from audio matches what's actually on screen —
  *    part of the story-verification "checks and balances".
+ *
+ * 3. Video pause/play detection. Reports when the page's video pauses or
+ *    resumes, so the service worker can hold off the automatic check while
+ *    there's nothing new happening — no point spending an API call analyzing
+ *    a paused video. Watches the first <video> found in DOM order; pages with
+ *    multiple video elements may not be tracked perfectly.
  */
 
 (function () {
@@ -131,14 +140,60 @@
     return document.querySelector(selector)?.getAttribute('content')?.trim() || '';
   }
 
+  function itempropContent(name) {
+    const el = document.querySelector(`[itemprop="${name}"]`);
+    if (!el) return '';
+    return (el.getAttribute('content') || el.textContent || '').trim();
+  }
+
   /**
-   * Scrape the on-screen text that identifies what this page is about:
-   * title, main headline, social metadata, and image alt text / captions.
+   * Pull headline/description out of JSON-LD structured data
+   * (<script type="application/ld+json">), if present. A broad, standards-based
+   * signal — most professional news and video sites embed Article/NewsArticle/
+   * VideoObject schema for SEO regardless of their visual layout, so this works
+   * across many platforms without guessing site-specific CSS classes.
+   */
+  function readJsonLd() {
+    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      let data;
+      try {
+        data = JSON.parse(script.textContent);
+      } catch {
+        continue; // malformed JSON-LD is common — skip and keep looking
+      }
+
+      const candidates = Array.isArray(data) ? data
+        : Array.isArray(data?.['@graph']) ? data['@graph']
+        : [data];
+
+      for (const item of candidates) {
+        const type = item?.['@type'];
+        const typeStr = Array.isArray(type) ? type.join(',') : (type || '');
+        if (!/Article|NewsArticle|Report|VideoObject/i.test(typeStr)) continue;
+
+        const headline = (item.headline || item.name || '').toString().trim();
+        const description = (item.description || '').toString().trim();
+        if (headline || description) return { headline, description };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Scrape the on-screen text that identifies what this page is about: title,
+   * main headline, structured data, social metadata, and image alt text /
+   * captions. Layers several standards-based signals (not site-specific CSS
+   * hacks) so this works across YouTube, news sites, and other video platforms
+   * without a selector list per site.
    */
   function readPageSignals() {
     const headline = document.querySelector('h1')?.textContent?.trim().slice(0, 300) || '';
-    const ogTitle  = metaContent('meta[property="og:title"]');
-    const ogDesc   = metaContent('meta[property="og:description"]') || metaContent('meta[name="description"]');
+    const itempropHeadline = itempropContent('headline').slice(0, 300);
+    const jsonLd   = readJsonLd();
+    const ogTitle  = metaContent('meta[property="og:title"]') || metaContent('meta[name="twitter:title"]');
+    const ogDesc   = metaContent('meta[property="og:description"]')
+      || metaContent('meta[name="twitter:description"]')
+      || metaContent('meta[name="description"]');
 
     // Image metadata: og:image alt text plus the first few figure captions /
     // meaningful image alts near the top of the page ("crucial photos").
@@ -153,7 +208,15 @@
 
     return {
       pageTitle:    document.title?.trim().slice(0, 300) || '',
-      onScreenText: [headline, ogTitle, ogDesc, ...imageTexts]
+      onScreenText: [
+        headline,
+        itempropHeadline,
+        jsonLd?.headline,
+        ogTitle,
+        ogDesc,
+        jsonLd?.description,
+        ...imageTexts,
+      ]
         .filter(Boolean)
         .join('\n')
         .slice(0, 1500),
@@ -174,6 +237,20 @@
     send({ type: 'PAGE_SIGNALS', payload: signals });
   }
 
+  // ─── Video Pause Detection ──────────────────────────────────────────────────
+
+  let lastVideoPaused = null; // null = not yet observed, avoids a spurious first message
+
+  function pollVideoState() {
+    const video = document.querySelector('video');
+    if (!video) return; // no video in this frame — nothing to report
+
+    const paused = video.paused;
+    if (paused === lastVideoPaused) return;
+    lastVideoPaused = paused;
+    send({ type: paused ? 'VIDEO_PAUSED' : 'VIDEO_PLAYING' });
+  }
+
   // ─── Messaging ─────────────────────────────────────────────────────────────
 
   function send(message) {
@@ -186,12 +263,15 @@
     }
   }
 
-  const captionTimer = setInterval(pollCaptions, CAPTION_POLL_MS);
+  const captionTimer = setInterval(() => {
+    pollCaptions();
+    pollVideoState();
+  }, CAPTION_POLL_MS);
   let signalsTimer   = null;
 
   if (IS_TOP_FRAME) {
     signalsTimer = setInterval(pollSignals, SIGNALS_POLL_MS);
     pollSignals(); // send initial signals immediately, don't wait 8s
-    console.log('[FactLens] Content script loaded (captions + page signals).');
+    console.log('[FactLens] Content script loaded (captions + page signals + video state).');
   }
 })();
