@@ -262,6 +262,40 @@ Railway can host the backend API and web studio as one Node service:
    available under `/coverage`, `/factcheck`, `/discussion`, `/transcribe`,
    `/health`, and `/status`.
 
+## Studio Acceptance Tests
+
+The backend package includes a Playwright runner for the hosted studio.
+
+Fast smoke checks:
+
+```bash
+cd factlens/backend
+npm run test:studio
+```
+
+This checks `/health`, `/status`, provider variable visibility, the deployed studio
+shell, sample loading, clear-form behavior, empty validation, developer settings,
+and desktop/mobile layouts.
+
+Live provider check:
+
+```bash
+cd factlens/backend
+npm run test:studio:live
+```
+
+This builds a real Community Note and runs statement and public-reaction checks.
+Use it intentionally because it spends Groq, NewsAPI, and Tavily calls.
+
+By default the runner targets:
+
+```text
+https://factlens-production.up.railway.app
+```
+
+Set `FACTLENS_TEST_URL` to test a different deployment or local server. Set
+`CHROME_PATH` if Playwright cannot find Chrome on a machine.
+
 ## Project Files
 
 ```text
@@ -282,12 +316,18 @@ factlens/
 |       `-- sidebar.js
 |-- backend/
 |   |-- server.js
+|   |-- playwright.config.js
 |   |-- .env.example
 |   |-- public/
 |   |   |-- index.html
 |   |   |-- samples.js
 |   |   |-- styles.css
 |   |   `-- app.js
+|   |-- scripts/
+|   |   `-- run-studio-tests.js
+|   |-- tests/
+|   |   |-- studio-live.spec.js
+|   |   `-- studio-smoke.spec.js
 |   |-- data/
 |   |   `-- bias-ratings.json
 |   |-- lib/

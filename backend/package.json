@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test:studio": "node scripts/run-studio-tests.js",
+    "test:studio:live": "node scripts/run-studio-tests.js --live"
   },
   "dependencies": {
     "@tavily/core": "0.5.2",
@@ -15,5 +17,8 @@
     "express": "^4.22.1",
     "multer": "^2.0.1",
     "openai": "4.96.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
   }
 }
