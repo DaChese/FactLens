@@ -10,6 +10,8 @@ const launchOptions = chromePath ? { executablePath: chromePath } : {};
 
 export default defineConfig({
   testDir: './tests',
+  workers: 1,
+  retries: 1,
   timeout: 90_000,
   expect: {
     timeout: 10_000,

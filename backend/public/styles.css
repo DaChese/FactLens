@@ -1,16 +1,20 @@
 :root {
-  --bg: #f4f1eb;
-  --paper: #fffdf8;
-  --ink: #111;
-  --muted: #5f5b53;
-  --line: #bcb4a7;
-  --soft: #ece6db;
-  --good: #1f6f3a;
-  --bad: #9b1c1c;
-  --warn: #7a5400;
+  --bg: #080a0f;
+  --paper: #111620;
+  --panel: #151b27;
+  --ink: #f6f7fb;
+  --muted: #a8b0bf;
+  --line: #31394a;
+  --soft: #202838;
+  --field: #0c1018;
+  --accent: #8cc7ff;
+  --live: #e24d5c;
+  --good: #5bd184;
+  --bad: #ff7a7a;
+  --warn: #f3bd57;
   --radius: 6px;
-  --font-serif: "Times New Roman", Times, serif;
-  --font-sans: Arial, Helvetica, sans-serif;
+  --font-serif: Georgia, "Times New Roman", Times, serif;
+  --font-sans: Inter, Arial, Helvetica, sans-serif;
 }
 
 * {
@@ -24,7 +28,9 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--bg);
+  background:
+    linear-gradient(180deg, rgba(140, 199, 255, 0.08), rgba(8, 10, 15, 0) 260px),
+    var(--bg);
   color: var(--ink);
   font-family: var(--font-serif);
 }
@@ -51,7 +57,7 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--ink);
+  outline: 2px solid var(--accent);
 }
 
 h1,
@@ -67,6 +73,7 @@ h1 {
   font-size: clamp(38px, 6vw, 82px);
   line-height: 0.9;
   letter-spacing: 0;
+  text-wrap: balance;
 }
 
 h2 {
@@ -91,8 +98,9 @@ main {
   justify-content: space-between;
   gap: 24px;
   padding: 28px clamp(16px, 4vw, 54px);
-  border-bottom: 2px solid var(--ink);
-  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+  background: rgba(10, 13, 20, 0.96);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 }
 
 .brand {
@@ -107,15 +115,18 @@ main {
   flex: 0 0 auto;
   width: 48px;
   height: 48px;
-  border: 2px solid var(--ink);
+  border: 1px solid var(--accent);
   border-radius: 50%;
+  background: #0c1724;
+  color: var(--accent);
   font-family: var(--font-sans);
   font-weight: 800;
+  box-shadow: 0 0 0 4px rgba(140, 199, 255, 0.08);
 }
 
 .eyebrow {
   margin: 0 0 7px;
-  color: var(--muted);
+  color: var(--accent);
   font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 700;
@@ -125,10 +136,11 @@ main {
 
 .status-pill {
   flex: 0 0 auto;
-  border: 1px solid var(--ink);
+  border: 1px solid var(--line);
   border-radius: 999px;
   padding: 8px 12px;
-  background: var(--paper);
+  background: var(--field);
+  color: var(--muted);
   font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 700;
@@ -137,11 +149,13 @@ main {
 .status-pill.ok {
   border-color: var(--good);
   color: var(--good);
+  box-shadow: 0 0 18px rgba(91, 209, 132, 0.12);
 }
 
 .status-pill.error {
-  border-color: var(--bad);
-  color: var(--bad);
+  border-color: var(--live);
+  color: var(--live);
+  box-shadow: 0 0 18px rgba(226, 77, 92, 0.14);
 }
 
 .intro,
@@ -150,7 +164,7 @@ main {
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
   gap: 24px;
   padding: 26px 0;
-  border-bottom: 1px solid var(--ink);
+  border-bottom: 1px solid var(--line);
 }
 
 .intro p,
@@ -176,9 +190,11 @@ main {
 
 .notice {
   align-self: start;
-  border: 1px solid var(--ink);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--live);
   padding: 13px 14px;
-  background: var(--paper);
+  background: rgba(226, 77, 92, 0.08);
+  color: var(--ink);
 }
 
 .workflow {
@@ -188,6 +204,7 @@ main {
   align-items: center;
   padding: 16px 0;
   border-bottom: 1px solid var(--line);
+  color: var(--muted);
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 700;
@@ -197,7 +214,8 @@ main {
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 6px 10px;
-  background: var(--paper);
+  background: var(--field);
+  color: var(--ink);
 }
 
 .studio-grid {
@@ -237,9 +255,10 @@ form,
 .note,
 .followups,
 .developer-settings {
-  border: 1px solid var(--ink);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--paper);
+  background: var(--panel);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
 }
 
 form {
@@ -283,11 +302,16 @@ textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 4px;
-  background: #fff;
+  background: var(--field);
   color: var(--ink);
   padding: 11px 12px;
   font-family: var(--font-sans);
   font-size: 15px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #70798b;
 }
 
 textarea {
@@ -317,7 +341,7 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 12px;
-  background: #fff;
+  background: var(--field);
   color: var(--ink);
   text-align: left;
 }
@@ -335,10 +359,10 @@ textarea {
 }
 
 button {
-  border: 1px solid var(--ink);
+  border: 1px solid var(--accent);
   border-radius: 4px;
-  background: var(--ink);
-  color: #fff;
+  background: var(--accent);
+  color: #06101a;
   cursor: pointer;
   padding: 11px 15px;
   font-family: var(--font-sans);
@@ -347,13 +371,14 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: #333;
+  border-color: #b9dcff;
+  background: #b9dcff;
 }
 
 button.text-button,
 .sample-card {
   background: transparent;
-  color: var(--ink);
+  color: var(--accent);
 }
 
 button.text-button:hover:not(:disabled),
@@ -375,6 +400,9 @@ button:disabled {
 .note {
   min-height: 560px;
   padding: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)),
+    var(--paper);
 }
 
 .note:focus {
@@ -398,6 +426,7 @@ button:disabled {
   font-size: 28px;
   font-weight: 700;
   line-height: 1.05;
+  color: #fff;
 }
 
 .low-confidence {
@@ -418,7 +447,7 @@ button:disabled {
 }
 
 .note a {
-  color: var(--ink);
+  color: var(--accent);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
@@ -437,6 +466,7 @@ button:disabled {
   font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 800;
+  color: var(--muted);
 }
 
 .tag-confirmed {
@@ -467,6 +497,7 @@ button:disabled {
 
 .developer-settings summary {
   cursor: pointer;
+  color: var(--accent);
   font-family: var(--font-sans);
   font-weight: 800;
 }
@@ -496,7 +527,7 @@ button:disabled {
 }
 
 .methodology {
-  border-top: 1px solid var(--ink);
+  border-top: 1px solid var(--line);
 }
 
 .method-grid {

@@ -10,6 +10,7 @@ const playwrightArgs = ['test'];
 
 if (!live) {
   playwrightArgs.push('tests/studio-smoke.spec.js');
+  playwrightArgs.push('tests/studio-edge.spec.js');
 }
 
 const child = spawn(
