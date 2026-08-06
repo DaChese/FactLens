@@ -62,20 +62,34 @@ export async function recordCall(provider, promise) {
   }
 }
 
+/**
+ * A key is only "configured" if it's a real value, not the placeholder copied
+ * out of .env.example. Reporting `gsk_...` as configured makes the Settings
+ * page show green for a backend that cannot make a single successful call —
+ * exactly the thing that panel exists to catch before a demo.
+ */
+export function isRealKey(value) {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (trimmed.length < 12) return false;      // every real provider key is far longer
+  if (trimmed.endsWith('...')) return false;  // gsk_... / tvly-... straight from .env.example
+  return true;
+}
+
 /** Snapshot for GET /status. */
 export function getStatus() {
   return {
     groq: {
       ...status.groq,
-      configured: !!process.env.GROQ_API_KEY,
+      configured: isRealKey(process.env.GROQ_API_KEY),
     },
     tavily: {
       ...status.tavily,
-      configured: !!process.env.TAVILY_API_KEY,
+      configured: isRealKey(process.env.TAVILY_API_KEY),
     },
     newsapi: {
       ...status.newsapi,
-      configured: !!process.env.NEWSAPI_KEY,
+      configured: isRealKey(process.env.NEWSAPI_KEY),
     },
   };
 }

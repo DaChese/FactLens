@@ -319,6 +319,39 @@ a:hover {
   line-height: 1.8;
 }
 
+/* When the story broke — sits under the headline, above the match evidence. */
+.fl-note-date {
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+
+/* Verbatim public-reaction quotes. Indented and ruled so they read visibly as
+   someone else's words, not as FactLens's own summary. */
+.fl-quote-list {
+  list-style: none;
+  margin: 6px 0 8px;
+  padding: 0;
+}
+
+.fl-quote {
+  border-left: 2px solid var(--rule-light);
+  padding-left: 8px;
+  margin-bottom: 8px;
+}
+
+.fl-quote-text {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--ink-soft);
+  margin-bottom: 2px;
+}
+
+.fl-quote-source {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
 /* "Right story?" rating row */
 .fl-note-rating {
   display: flex;

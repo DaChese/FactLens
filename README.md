@@ -5,9 +5,12 @@ Instead of continuously fact-checking every sentence, it opens a side panel, let
 the viewer press **Start**, collects local context from the current tab, and then
 builds one neutral note about the story being discussed.
 
-The current `main` branch is v1.5.0. It is local-development focused: the backend
+The current `main` branch is v1.6.0. It is local-development focused: the backend
 runs on your machine, and the extension talks to `http://localhost:3001` unless
 you change the backend URL in the extension settings page.
+
+On Windows, see [Windows / PowerShell](#windows--powershell) — PowerShell blocks
+npm's script shim by default, so use `npm.cmd` rather than `npm`.
 
 The backend also serves the FactLens Analysis Studio from `/`. This is useful for
 Railway hosting and demos: visitors can paste transcript/page text, build a
@@ -24,38 +27,53 @@ pipeline without installing the Chrome extension.
 - FactLens schedules an automatic note attempt. If page title/headline signals are
   available, this usually happens after about 5 seconds. If not, a 20-second
   fallback timer is used.
-- If the story match is unclear, FactLens retries up to 3 total attempts, 15
-  seconds apart.
-- A confident automatic note stops the session.
-- **Check now** manually builds a note for the active session before the automatic
-  timer fires.
-- **Check statements in this segment** runs claim checking on demand.
-- **Check public reaction** searches and summarizes public discussion on demand.
-- **Right story?** feedback lets the viewer mark the story match helpful or dismiss
-  it. A dismissal evicts the backend coverage cache for that query.
+- If the story match is unclear, FactLens retries up to 3 total attempts. Retries
+  wait for **new material** rather than a fixed delay: it polls every 4 seconds and
+  fires as soon as roughly 15 new words of transcript or changed page signals
+  arrive, up to a 15-second ceiling. If nothing new has arrived at all, it stops
+  instead of re-sending identical input that could only produce an identical answer.
+- A confident automatic note stops the session. So does **Check now** — a manual
+  check is the session's one note.
+- **Check statements in this segment** runs claim checking on demand. Each verdict
+  lists its sources with publication dates.
+- **Check public reaction** summarizes public discussion on demand and returns
+  verbatim quotes showing what people actually said.
+- **Right story?** feedback: **Helpful** records the feedback and ends the session.
+  **Not helpful** keeps listening and tries again — it reuses the transcript
+  already collected and tells the backend not to offer that story again.
+
+Session lifetime is enforced from two directions, because MV3 suspends the service
+worker after ~30s idle and `setTimeout` does not survive that. The offscreen
+document (whose timers cannot be suspended) heartbeats every 15 seconds and caps
+recording at 6 minutes locally; the service worker's watchdog enforces a 5-minute
+session cap and ends sessions that are flagged active with no work scheduled.
 
 Known implementation caveats in the current code:
 
-- Manual **Check now** cancels the automatic timer and builds a note, but it does
-  not currently auto-stop the capture session afterward.
-- **Check statements** and **Check public reaction** can run after auto-stop, but
-  their completion currently broadcasts `listening`, which can make the sidebar
-  look active even when capture has stopped.
 - Post-note actions target the first stored note in the service worker. Multiple
   tabs with built notes can therefore be ambiguous.
+- **Stop** ends sessions on every tab, not just the current one. This is
+  deliberate — it is the recovery path for a stuck session.
+- In-memory state (transcript buffers, page signals) is lost if the service worker
+  restarts. The watchdog ends such sessions cleanly rather than letting them hang.
 
 ## What a Note Shows
 
 Each Community Note can include:
 
-- The identified story headline.
+- The identified story headline, with the date the story broke (taken from the most
+  recent article covering it).
 - A match-evidence line showing whether the note matched on transcript,
   on-screen text, and/or other outlets' headlines.
 - Context that other outlets reported but the watched segment did not mention.
-- A list of other outlets covering the story, labeled with static editorial-lean
-  ratings from `backend/data/bias-ratings.json`.
-- Optional statement checks labeled **Confirmed**, **Disputed**, or **Unclear**.
-- Optional public reaction summary, kept separate from outlet coverage.
+- A list of other outlets covering the story, each labeled with a static
+  editorial-lean rating from `backend/data/bias-ratings.json` and its publication
+  date.
+- Optional statement checks labeled **Confirmed**, **Disputed**, or **Unclear**,
+  each listing its sources with their publication dates.
+- Optional public reaction: a tenor summary plus verbatim quotes, each attributed
+  to its platform and date. Kept separate from outlet coverage and never blended
+  with it.
 - A "Right story?" helpful/not-helpful control.
 
 FactLens intentionally avoids the old colored TRUE/FALSE feed and bias meter. The
@@ -98,6 +116,31 @@ npm install
 npm run dev
 ```
 
+#### Windows / PowerShell
+
+PowerShell blocks npm's `.ps1` shim by default, so plain `npm` fails with
+`npm.ps1 cannot be loaded because running scripts is disabled on this system`.
+That is a PowerShell execution-policy setting, not a problem with this project.
+
+Use `npm.cmd` instead — no system changes needed:
+
+```powershell
+cd C:\path\to\FactLens\backend
+npm.cmd install
+npm.cmd run dev
+```
+
+Two alternatives:
+
+- `node --watch server.js` — skips npm entirely.
+- `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` — makes
+  plain `npm` work permanently. Only affects your user account; reverse it with
+  `-ExecutionPolicy Undefined`.
+
+Use `npm run dev` (`node --watch`) while developing and `npm start` for a demo —
+`--watch` restarts on every file save, which clears the in-memory coverage cache
+and the provider budget counters.
+
 Then check the server:
 
 ```bash
@@ -109,6 +152,21 @@ Expected response:
 ```json
 {"status":"ok","timestamp":"..."}
 ```
+
+#### Startup warnings
+
+The backend validates keys at startup and will tell you if they are unusable —
+including the `gsk_...` / `tvly-...` placeholders copied from `.env.example`,
+which look configured but fail every call with a 401:
+
+```
+[FactLens] GROQ_API_KEY, TAVILY_API_KEY still hold the .env.example placeholder value
+[FactLens] NEWSAPI_KEY not set - multi-outlet coverage analysis (/coverage) is disabled
+```
+
+`NEWSAPI_KEY` matters more than "optional" suggests: without it `/coverage`
+returns `available: false` and **no Community Note is built at all**. Story dates
+also come from NewsAPI article timestamps, so they disappear without it.
 
 ### 2. Configure API keys
 
@@ -199,7 +257,15 @@ APIs:
   HTML5 text tracks, and caption-like DOM elements, including iframes.
 - `extension/content.js` also sends page signals such as `document.title`,
   headlines, Open Graph metadata, Twitter Card metadata, JSON-LD, image alt text,
-  and figure captions.
+  and figure captions. On YouTube it additionally reads the expanded video
+  description, because `og:description` there is truncated to roughly the first
+  line. Title and description are the **primary** story signal — up to 1500
+  characters reach the model, and the transcript is treated as corroboration.
+- `extension/content.js` scrapes comments on the page (YouTube and generic comment
+  selectors) for the public-reaction step. These are reaction to the exact video or
+  article being watched, so they need no story matching. Note that YouTube
+  lazy-loads comments: they exist only once the viewer has scrolled to them, and
+  FactLens deliberately does not auto-scroll the page to force them in.
 - `extension/offscreen.js` captures tab audio with `tabCapture`, routes it back to
   the speakers, and keeps a rolling audio ring buffer.
 
@@ -222,17 +288,36 @@ When a note is built:
 8. If confidence is sufficient and transcript text exists, Groq extracts up to 3
    missing-context facts from other coverage.
 
-Coverage results are cached by query for 10 minutes. Claim results are cached for
-1 hour.
+Article results are cached by query for 10 minutes. Missing context is cached
+separately, keyed by query **and** a transcript fingerprint — two segments about
+the same story have the same coverage but different omissions, so sharing one
+cache entry would attribute the first segment's gaps to the second. Claim results
+are cached for 1 hour.
 
 ### On-demand followups
 
 - `/factcheck` extracts up to 2 checkable claims from the note transcript, searches
-  Tavily, and asks Groq for grounded verdicts.
-- `/discussion` reuses the note query, searches Tavily for public reaction, and
-  asks Groq for a neutral summary.
+  Tavily, and asks Groq for grounded verdicts. If the strict extraction pass finds
+  no claims, it retries once with a lower bar that accepts hedged and attributed
+  statements. Verdicts carry source publication dates, and the model is told to
+  prefer recent evidence and lower confidence when the only support is dated.
+- `/discussion` summarizes public reaction from two independent sources: comments
+  scraped from the page being watched, and a Tavily search across Reddit, Hacker
+  News, Quora, Bluesky, Threads, YouTube, X and Facebook. Results are filtered for
+  relevance against the story headline; if the strict pass finds fewer than two
+  usable results it automatically retries wider (whole web, lower bar, no date
+  ceiling) rather than reporting silence. The search is best-effort — if it fails,
+  page comments alone still produce a result.
+- `/discussion` also returns **verbatim quotes**. Every quote is checked against the
+  source text it claims to come from and dropped if it does not match, so a
+  fabricated or paraphrased quote cannot reach the UI.
 - `/coverage/feedback` handles note feedback. Thumbs down evicts the cached
-  coverage result for that query. Thumbs up is logged only.
+  coverage result for that query and triggers a retry that rules that story out.
+
+Search relevance is scored with a stemming keyword-overlap check local to
+`discussion.js`, deliberately separate from `lib/textMatch.js` — `/coverage`'s
+confidence thresholds are tuned against that shared function, so loosening it
+there would change which notes get flagged low-confidence.
 
 ## Backend Endpoints
 
@@ -377,6 +462,6 @@ factlens/
 
 ## Version
 
-Current README target: `main` at v1.5.0.
+Current README target: `main` at v1.6.0.
 
 See `CHANGELOG.md` for the detailed version history.

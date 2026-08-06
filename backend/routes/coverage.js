@@ -63,6 +63,15 @@ const MODEL      = 'llama-3.3-70b-versatile';
 const FAST_MODEL = 'llama-3.1-8b-instant';
 const MAX_CHARS  = 4000;
 
+// Set once if FAST_MODEL ever 404s, so we stop paying for a doomed call on
+// every subsequent request. Resets on backend restart, which is the right
+// scope — a redeployed/renamed model should get one fresh try.
+let fastModelUnavailable = false;
+
+// Same idea for JSON mode: if a model rejects response_format, stop sending it
+// rather than burning a failed call on every request to rediscover that.
+let jsonModeUnsupported = false;
+
 // ─── Bias Ratings Lookup ─────────────────────────────────────────────────────
 // Loaded once at startup. Index by both normalised outlet name and domain so we
 // can match NewsAPI source names ("Fox News") and article URLs (foxnews.com).
@@ -129,17 +138,61 @@ function lookupWatchedOutlet(hostname) {
 // search query for 10 minutes. Live news doesn't change faster than that.
 
 const COVERAGE_CACHE_TTL_MS = 10 * 60 * 1000;
-const coverageCache = new Map(); // normalised query → { result, cachedAt }
+const coverageCache = new Map(); // normalised query → { articles, cachedAt }
 
-function getCachedCoverage(query) {
-  const key    = query.toLowerCase().trim();
-  const cached = coverageCache.get(key);
-  if (!cached) return null;
-  if (Date.now() - cached.cachedAt > COVERAGE_CACHE_TTL_MS) {
-    coverageCache.delete(key);
+// Missing context is cached SEPARATELY from articles, and deliberately not by
+// query alone. "What did this segment leave out" is a statement about a
+// specific transcript — two segments covering the same story have the same
+// articles but different omissions, so sharing one cache entry between them
+// would attribute the first segment's gaps to the second.
+const contextCache = new Map(); // query + transcript fingerprint → { missingContext, cachedAt }
+
+// Entries are only pruned when they're read, so a long session can accumulate
+// keys nothing ever asks for again — and contextCache gains one per distinct
+// transcript, which grows faster than one per story. Cheap hard cap: drop the
+// oldest entries once a cache is clearly larger than a viewing session needs.
+const MAX_CACHE_ENTRIES = 200;
+
+function boundCache(cache) {
+  if (cache.size <= MAX_CACHE_ENTRIES) return;
+  // Map preserves insertion order, so the first keys are the oldest writes.
+  const excess = cache.size - MAX_CACHE_ENTRIES;
+  let dropped = 0;
+  for (const key of cache.keys()) {
+    cache.delete(key);
+    if (++dropped >= excess) break;
+  }
+}
+
+function readCache(cache, key) {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.cachedAt > COVERAGE_CACHE_TTL_MS) {
+    cache.delete(key);
     return null;
   }
-  return cached.result;
+  return entry;
+}
+
+function coverageKey(query) {
+  return query.toLowerCase().trim();
+}
+
+/** Cheap non-cryptographic fingerprint — only needs to detect "different transcript". */
+function contextKey(query, transcript) {
+  let hash = 0;
+  for (let i = 0; i < transcript.length; i++) {
+    hash = ((hash << 5) - hash + transcript.charCodeAt(i)) | 0;
+  }
+  return `${coverageKey(query)}::${transcript.length}:${hash}`;
+}
+
+function getCachedArticles(query) {
+  return readCache(coverageCache, coverageKey(query))?.articles ?? null;
+}
+
+function getCachedContext(query, transcript) {
+  return readCache(contextCache, contextKey(query, transcript))?.missingContext ?? null;
 }
 
 // ─── System Prompts ──────────────────────────────────────────────────────────
@@ -158,10 +211,16 @@ points to an identifiable story.
 
 Rules:
 - "story" is a short, neutral headline (under 12 words) describing the story
-- Weigh the on-screen text heavily — a page title or headline usually names the story
-  directly and is more reliable than a partial or wandering transcript. If on-screen
-  text clearly names a story, use it even if the transcript is empty, unclear, or
-  seems to be about something else (the transcript may just not have caught up yet)
+- The page title, headline and description are your PRIMARY signal. They are
+  authored deliberately to say what the content is about, and they are far more
+  reliable than a partial or wandering transcript. Read them first and treat the
+  transcript as corroboration
+- The description in particular often names the specific event, people, and places
+  that make a good search query — mine it for those before falling back to the
+  transcript
+- If the title/description clearly name a story, use them even if the transcript is
+  empty, unclear, or seems to be about something else (the transcript may simply not
+  have caught up yet)
 - "query" is a 3-6 keyword web search query that would find other news articles
   about this same story (names, places, events — no filler words)
 - If there is neither a usable transcript nor usable on-screen text, or neither
@@ -171,6 +230,11 @@ Rules:
   information available. Treat it as a hypothesis to confirm, refine, or correct
   with the fuller information you have now — not as a fact to defer to. If the new
   information points somewhere else, say so; don't just repeat the old guess
+- You may also be given stories a viewer has explicitly REJECTED as wrong. Those
+  are not hypotheses — they are known-incorrect. Do not return them or a trivial
+  rewording of them. Look again at the title, description and transcript for a
+  different story. If nothing else is identifiable, return {"story": null} rather
+  than repeating a rejected answer
 - Return ONLY a valid JSON object — no markdown, no explanation
 
 Output format:
@@ -215,9 +279,13 @@ function stripFences(raw) {
  * information than the last pass had).
  * @returns {{ story: string, query: string } | null}
  */
-async function identifyStory(groq, transcript, onScreenText, replyLanguage, previousGuess = null) {
+async function identifyStory(groq, transcript, onScreenText, replyLanguage, previousGuess = null, rejectedStories = []) {
+  // The content script already curates this down to ~1500 chars of title,
+  // headline, and description — the highest-signal, most reliable input we get,
+  // and often a complete answer on its own. Truncating it to 600 here threw away
+  // more than half of it (usually the description) before the model ever saw it.
   const screenBlock = onScreenText
-    ? `\n\nOn-screen text from the page:\n${onScreenText.slice(0, 600)}`
+    ? `\n\nPage title, headline and description:\n${onScreenText.slice(0, 1500)}`
     : '';
   const transcriptBlock = transcript
     ? `Transcript (language: ${replyLanguage}):\n${transcript}`
@@ -225,29 +293,63 @@ async function identifyStory(groq, transcript, onScreenText, replyLanguage, prev
   const previousGuessBlock = previousGuess?.story
     ? `\n\nA previous pass, with less information available, tentatively guessed this story was about: "${previousGuess.story}" (search terms: "${previousGuess.query ?? ''}"). Confirm, refine, or correct this using the fuller information above.`
     : '';
+  // The viewer looked at these and said they were the wrong story. Unlike
+  // previousGuess, they are not hypotheses to refine — they are ruled out.
+  const rejectedBlock = rejectedStories.length > 0
+    ? `\n\nThe viewer has REJECTED these as the wrong story:\n${rejectedStories.map(s => `- "${s}"`).join('\n')}\nIdentify a different story, or return {"story": null}.`
+    : '';
 
   const callArgs = {
     max_tokens:  128,
     temperature: 0.1,
     messages: [
       { role: 'system', content: STORY_SYSTEM_PROMPT },
-      { role: 'user',   content: `${transcriptBlock}${screenBlock}${previousGuessBlock}` },
+      { role: 'user',   content: `${transcriptBlock}${screenBlock}${previousGuessBlock}${rejectedBlock}` },
     ],
+    // A parse failure here costs a whole retry cycle (null story → 'no_story'
+    // → the extension waits and runs the entire pipeline again), so constrain
+    // the decode rather than hoping the model skips the preamble. Dropped
+    // automatically below if the model turns out not to support it.
+    ...(jsonModeUnsupported ? {} : { response_format: { type: 'json_object' } }),
   };
 
-  let response;
-  try {
-    response = await recordCall('groq', groq.chat.completions.create({ ...callArgs, model: FAST_MODEL }));
-  } catch (err) {
-    // An invalid/unauthorized key fails identically on every model — retrying
-    // with MODEL would just double the wasted call and the wait before the
-    // real error surfaces. Only fall back when it looks like FAST_MODEL
-    // itself is the problem (e.g. an unavailable model name).
-    if (err.status === 401 || err.status === 403 || /^40[13]\b/.test(err.message || '')) {
+  /**
+   * Story identification is the one call whose failure kills the whole note —
+   * everything downstream degrades gracefully, this doesn't. So it gets two
+   * narrow, self-latching recoveries instead of one broad retry-everything.
+   */
+  async function callStoryModel(model, args) {
+    try {
+      return await recordCall('groq', groq.chat.completions.create({ ...args, model }));
+    } catch (err) {
+      // Some models reject response_format. Retry once without it rather than
+      // failing the note over a formatting nicety, and stop asking after that.
+      if (args.response_format && err.status === 400) {
+        jsonModeUnsupported = true;
+        console.warn(`[/coverage] ${model} rejected response_format (400) — falling back to prompt-only JSON from now on`);
+        const { response_format, ...rest } = args;
+        return recordCall('groq', groq.chat.completions.create({ ...rest, model }));
+      }
       throw err;
     }
-    console.warn(`[/coverage] ${FAST_MODEL} failed (${err.message}), falling back to ${MODEL}`);
-    response = await recordCall('groq', groq.chat.completions.create({ ...callArgs, model: MODEL }));
+  }
+
+  let response;
+  const model = fastModelUnavailable ? MODEL : FAST_MODEL;
+  try {
+    response = await callStoryModel(model, callArgs);
+  } catch (err) {
+    // Only a genuinely missing model name is worth a second call. Auth errors,
+    // rate limits, and timeouts all fail the same way on MODEL, so retrying
+    // there just doubles the wait before the real error surfaces — and when
+    // Groq is rate-limiting us, it doubles the load that caused it.
+    if (fastModelUnavailable || err.status !== 404) throw err;
+
+    // Latch it: without this, a decommissioned FAST_MODEL means every single
+    // request pays both models' latency forever instead of just the first.
+    fastModelUnavailable = true;
+    console.warn(`[/coverage] ${FAST_MODEL} is unavailable (404) — using ${MODEL} for story ID from now on`);
+    response = await callStoryModel(MODEL, callArgs);
   }
 
   let parsed;
@@ -259,6 +361,15 @@ async function identifyStory(groq, transcript, onScreenText, replyLanguage, prev
   }
 
   if (!parsed?.story || !parsed?.query || typeof parsed.query !== 'string') return null;
+
+  // Enforce the rejection server-side. Asking the model not to repeat a rejected
+  // story is a request, not a guarantee — and handing the viewer back the exact
+  // answer they just marked wrong is the most annoying failure this can have.
+  const repeated = rejectedStories.find(s => keywordOverlap(s, String(parsed.story)) >= 0.6);
+  if (repeated) {
+    console.warn(`[/coverage] Model returned a rejected story ("${parsed.story}" ≈ "${repeated}") — treating as no story`);
+    return null;
+  }
   return { story: String(parsed.story).slice(0, 200), query: parsed.query.slice(0, 100) };
 }
 
@@ -308,6 +419,7 @@ async function searchNewsApi(newsApiKey, query, language) {
       outlet,
       url:         a.url,
       bias:        lookupBias(outlet, a.url),
+      publishedAt: a.publishedAt || null,
     });
     if (articles.length >= 8) break;
   }
@@ -380,8 +492,12 @@ function tallyCoverage(articles) {
 const MATCH_THRESHOLD = 0.3;
 
 router.post('/', async (req, res, next) => {
+  const requestStartedAt = Date.now();
   try {
-    const { transcript, language = 'english', outlet = null, pageTitle = null, onScreenText = null, previousGuess = null } = req.body;
+    const { transcript, language = 'english', outlet = null, pageTitle = null, onScreenText = null, previousGuess = null, rejectedStories = [] } = req.body;
+    const safeRejected = Array.isArray(rejectedStories)
+      ? rejectedStories.filter(s => typeof s === 'string' && s.trim()).slice(0, 5).map(s => s.slice(0, 200))
+      : [];
 
     const hasTranscript = typeof transcript === 'string' && transcript.trim().length > 0;
     const hasScreenSignals =
@@ -416,7 +532,9 @@ router.post('/', async (req, res, next) => {
     const screenSignals  = [pageTitle, onScreenText].filter(s => s && typeof s === 'string').join('\n');
 
     // ── Step 1: Identify the story (transcript + on-screen text) ──
-    const storyInfo = await identifyStory(groq, safeTranscript, screenSignals, replyLanguage, previousGuess);
+    const storyStartedAt = Date.now();
+    const storyInfo = await identifyStory(groq, safeTranscript, screenSignals, replyLanguage, previousGuess, safeRejected);
+    const storyMs = Date.now() - storyStartedAt;
     if (!storyInfo) {
       console.log('[/coverage] No identifiable news story in transcript');
       return res.json({ available: true, story: null, query: null, articles: [], coverage: null, missing_context: [], outlet_bias: outletBias });
@@ -425,10 +543,11 @@ router.post('/', async (req, res, next) => {
     console.log(`[/coverage] Story: "${storyInfo.story}" (query: "${storyInfo.query}")`);
 
     // ── Step 2: Fetch articles (cache first — NewsAPI quota is small) ──
-    const cacheKey = storyInfo.query.toLowerCase().trim();
-    let cached     = getCachedCoverage(storyInfo.query);
-    const articles = cached?.articles ?? await searchNewsApi(newsApiKey, storyInfo.query, language);
-    console.log(`[/coverage] ${articles.length} outlets covering this story${cached ? ' (cached)' : ''}`);
+    const newsStartedAt  = Date.now();
+    const cachedArticles = getCachedArticles(storyInfo.query);
+    const articles       = cachedArticles ?? await searchNewsApi(newsApiKey, storyInfo.query, language);
+    const newsMs         = Date.now() - newsStartedAt;
+    console.log(`[/coverage] ${articles.length} outlets covering this story${cachedArticles ? ' (cached)' : ''}`);
 
     // ── Step 3: Consensus check — don't trust a single signal ──
     // The LLM's story identification is cross-checked against two independent
@@ -466,28 +585,54 @@ router.post('/', async (req, res, next) => {
     // transcript yet — "what did this segment omit" is meaningless to ask
     // when nothing has been transcribed from it so far (the fast page-signals
     // path can reach this point with an empty transcript).
+    const contextStartedAt = Date.now();
     let missingContext = [];
+    let contextCached  = false;
     if (!lowConfidence && hasTranscript) {
-      missingContext = cached?.missing_context
-        ?? await extractMissingContext(groq, safeTranscript, articles, replyLanguage);
+      const hit = getCachedContext(storyInfo.query, safeTranscript);
+      contextCached = hit !== null;
+      missingContext = hit ?? await extractMissingContext(groq, safeTranscript, articles, replyLanguage);
+      if (!contextCached) {
+        contextCache.set(contextKey(storyInfo.query, safeTranscript), {
+          missingContext,
+          cachedAt: Date.now(),
+        });
+        boundCache(contextCache);
+      }
+    }
+    const contextMs = Date.now() - contextStartedAt;
+
+    // Cache articles so repeat requests don't burn the small NewsAPI quota.
+    // Confidence is NOT cached — it depends on the page the viewer is watching.
+    if (!cachedArticles) {
+      coverageCache.set(coverageKey(storyInfo.query), { articles, cachedAt: Date.now() });
+      boundCache(coverageCache);
     }
 
-    // Cache articles + context so repeat requests don't burn NewsAPI/Groq quota.
-    // Confidence is NOT cached — it depends on the page the viewer is watching.
-    coverageCache.set(cacheKey, {
-      result:   { articles, missing_context: lowConfidence ? (cached?.missing_context ?? null) : missingContext },
-      cachedAt: cached ? coverageCache.get(cacheKey)?.cachedAt ?? Date.now() : Date.now(),
-    });
+    console.log(
+      `[/coverage] timing: story=${storyMs}ms news=${newsMs}ms${cachedArticles ? '(cached)' : ''} ` +
+      `context=${contextMs}ms${contextCached ? '(cached)' : ''} total=${Date.now() - requestStartedAt}ms`
+    );
+
+    // When the story broke, inferred from the coverage itself: the most recent
+    // article date. Used to date the note, and passed to /discussion so it looks
+    // for reaction from when the story was live rather than from today.
+    const storyDate = articles
+      .map(a => a.publishedAt)
+      .filter(Boolean)
+      .sort()
+      .pop() ?? null;
 
     return res.json({
       available:       true,
       story:           storyInfo.story,
       query:           storyInfo.query,
+      story_date:      lowConfidence ? null : storyDate,
       confidence,
       matched_on:      matchedOn,
       low_confidence:  lowConfidence,
       // Don't send article descriptions to the extension — titles are enough for the UI
-      articles:        lowConfidence ? [] : articles.map(({ title, outlet: o, url, bias }) => ({ title, outlet: o, url, bias })),
+      articles:        lowConfidence ? [] : articles.map(({ title, outlet: o, url, bias, publishedAt }) => ({ title, outlet: o, url, bias, publishedAt })),
       coverage:        lowConfidence ? null : tallyCoverage(articles),
       missing_context: missingContext,
       outlet_bias:     outletBias,
@@ -515,9 +660,18 @@ router.post('/feedback', (req, res) => {
   }
 
   if (helpful === false) {
-    const key     = query.toLowerCase().trim();
+    const key     = coverageKey(query);
     const removed = coverageCache.delete(key);
-    console.log(`[/coverage/feedback] Thumbs down on "${query}" — cache ${removed ? 'invalidated' : 'was already empty'}`);
+    // Context entries are keyed by query + transcript, so there's no single
+    // key to delete — drop every entry for this story.
+    let contextRemoved = 0;
+    for (const cachedKey of contextCache.keys()) {
+      if (cachedKey.startsWith(`${key}::`)) {
+        contextCache.delete(cachedKey);
+        contextRemoved += 1;
+      }
+    }
+    console.log(`[/coverage/feedback] Thumbs down on "${query}" — coverage cache ${removed ? 'invalidated' : 'was already empty'}, ${contextRemoved} context entries dropped`);
   } else {
     console.log(`[/coverage/feedback] Thumbs up on "${query}"`);
   }

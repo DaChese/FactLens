@@ -35,6 +35,27 @@ const TIMESLICE_MS = 500;
 // latency source when captions aren't available) shorter.
 const RING_SIZE = 120;
 
+// ── Session watchdog ──
+// MV3 suspends the service worker after ~30s idle, and setTimeout does not
+// survive that. Since every path that stops a session lives in the worker, a
+// suspension while a timer is pending used to leave this document capturing
+// tab audio indefinitely.
+//
+// This document's timers are NOT suspended — it's an ordinary page. So the
+// last-resort guarantee lives here, not in the worker:
+//  - the heartbeat wakes the worker (a runtime message is an event, and events
+//    start a dormant worker) and gives its watchdog a clock
+//  - the cap stops recording locally even if the worker never comes back
+//
+// chrome.alarms was the obvious alternative and is a trap: its minimum period
+// is 30s, and unpacked extensions are exempt from that floor — so it would
+// work perfectly in development and silently break once packed.
+const HEARTBEAT_MS     = 15000;         // comfortably inside the 30s idle timeout
+const MAX_RECORDING_MS = 6 * 60 * 1000; // absolute cap; the worker's own cap is 5 min
+
+let heartbeatTimer     = null;
+let recordingStartedAt = 0;
+
 let mediaRecorder = null;
 let audioContext  = null;
 let currentTabId  = null;
@@ -84,6 +105,15 @@ function sendBufferedAudio() {
  * @param {number} tabId
  */
 async function startRecording(streamId, tabId) {
+  // This document is shared across tabs — background.js reuses an existing one
+  // rather than creating a second. Without this, starting a session on tab B
+  // reassigned mediaRecorder while tab A's recorder and its stream tracks were
+  // still live, leaking that capture with no remaining handle to stop it.
+  if (mediaRecorder || audioContext) {
+    console.warn('[FactLens Offscreen] Recorder already running — stopping it before starting the new one');
+    stopRecording();
+  }
+
   currentTabId = tabId;
   ringBuffer   = [];
   headerChunk  = null;
@@ -144,6 +174,7 @@ async function startRecording(streamId, tabId) {
 
     // Start recording — timeslice fires ondataavailable every TIMESLICE_MS
     mediaRecorder.start(TIMESLICE_MS);
+    startHeartbeat(tabId);
     console.log(`[FactLens Offscreen] Recording started (${mimeType}, ${TIMESLICE_MS}ms timeslice)`);
 
   } catch (err) {
@@ -153,9 +184,44 @@ async function startRecording(streamId, tabId) {
 }
 
 /**
+ * Tick the service worker while a recording is live.
+ *
+ * Two jobs: keep/wake the worker so its own scheduling stays reliable, and
+ * enforce the absolute recording cap locally. This is the only timer in the
+ * system MV3 cannot suspend, so it is the only thing that can guarantee the
+ * capture eventually stops.
+ * @param {number} tabId
+ */
+function startHeartbeat(tabId) {
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  recordingStartedAt = Date.now();
+
+  heartbeatTimer = setInterval(() => {
+    const elapsed = Date.now() - recordingStartedAt;
+
+    if (elapsed > MAX_RECORDING_MS) {
+      // The worker's 5-minute cap should have ended this a minute ago. It
+      // didn't, so the worker is gone or wedged — stop the capture ourselves.
+      console.warn('[FactLens Offscreen] Recording cap reached — stopping locally');
+      sendToBackground({ type: 'SESSION_TIMEOUT', tabId });
+      stopRecording();
+      return;
+    }
+
+    sendToBackground({ type: 'SESSION_HEARTBEAT', tabId, elapsed });
+  }, HEARTBEAT_MS);
+}
+
+/**
  * Stop the current recording session and release resources.
  */
 function stopRecording() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  recordingStartedAt = 0;
+
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
   }

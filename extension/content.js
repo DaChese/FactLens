@@ -180,6 +180,27 @@
   }
 
   /**
+   * YouTube's og:description is truncated to roughly the first line, but the
+   * full video description usually names the story outright — who, where, and
+   * what happened. That makes it one of the strongest signals available, so it
+   * is worth one site-specific selector despite the standards-based approach
+   * used everywhere else here. Returns '' anywhere the selector doesn't match.
+   */
+  function readExpandedDescription() {
+    const selectors = [
+      'ytd-text-inline-expander #description-inline-expander',
+      '#description-inline-expander',
+      'ytd-video-secondary-info-renderer #description',
+      '[data-testid="video-description"]',
+    ];
+    for (const selector of selectors) {
+      const text = document.querySelector(selector)?.textContent?.trim();
+      if (text && text.length > 20) return text.slice(0, 800);
+    }
+    return '';
+  }
+
+  /**
    * Scrape the on-screen text that identifies what this page is about: title,
    * main headline, structured data, social metadata, and image alt text /
    * captions. Layers several standards-based signals (not site-specific CSS
@@ -206,6 +227,9 @@
       if (text && text.length > 15 && text.length < 300) imageTexts.push(text);
     }
 
+    // Title and headline first, then the descriptions — the backend reads this
+    // top-down and treats it as the primary story signal, so the most
+    // identifying text should lead.
     return {
       pageTitle:    document.title?.trim().slice(0, 300) || '',
       onScreenText: [
@@ -215,12 +239,77 @@
         ogTitle,
         ogDesc,
         jsonLd?.description,
+        readExpandedDescription(),
         ...imageTexts,
       ]
         .filter(Boolean)
         .join('\n')
         .slice(0, 1500),
     };
+  }
+
+  // ─── Public Comments ────────────────────────────────────────────────────────
+  // What viewers of THIS video/article are actually saying. Far more on-topic
+  // than a web search for the story, because there's no matching step that can
+  // go wrong — these comments are attached to the thing being watched.
+  //
+  // Caveat: YouTube lazy-loads comments as you scroll, so this returns nothing
+  // until the viewer has scrolled to them. We deliberately do NOT auto-scroll
+  // the page to force them in — hijacking the viewer's scroll position mid-video
+  // would be far more intrusive than simply having fewer comments.
+
+  const COMMENT_SELECTORS = [
+    'ytd-comment-thread-renderer #content-text',   // YouTube
+    'ytd-comment-view-model #content-text',        // YouTube (newer renderer)
+    '[data-testid="comment"] [data-testid="tweetText"]',
+    '.comment__body', '.comment-body', '.comment-content', '.comment-text',
+    'article .comment p',
+  ];
+
+  const MAX_COMMENTS     = 25;
+  const MAX_COMMENT_LEN  = 400;
+  const MIN_COMMENT_LEN  = 15;
+
+  function readComments() {
+    const seen = new Set();
+    const comments = [];
+
+    for (const selector of COMMENT_SELECTORS) {
+      let nodes;
+      try {
+        nodes = document.querySelectorAll(selector);
+      } catch {
+        continue; // malformed selector on some engine — skip it
+      }
+      for (const node of nodes) {
+        if (comments.length >= MAX_COMMENTS) break;
+        const text = node.textContent?.replace(/\s+/g, ' ').trim();
+        if (!text || text.length < MIN_COMMENT_LEN) continue;
+        const key = text.slice(0, 120).toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        comments.push(text.slice(0, MAX_COMMENT_LEN));
+      }
+      if (comments.length >= MAX_COMMENTS) break;
+    }
+
+    return comments;
+  }
+
+  let lastCommentCount = 0;
+
+  function pollComments() {
+    let comments;
+    try {
+      comments = readComments();
+    } catch {
+      return;
+    }
+    // Only send when meaningfully more have loaded — comments stream in as the
+    // viewer scrolls, and re-sending on every tick would be pure noise.
+    if (comments.length === 0 || comments.length <= lastCommentCount) return;
+    lastCommentCount = comments.length;
+    send({ type: 'PAGE_COMMENTS', payload: { comments } });
   }
 
   function pollSignals() {
@@ -270,8 +359,30 @@
   let signalsTimer   = null;
 
   if (IS_TOP_FRAME) {
-    signalsTimer = setInterval(pollSignals, SIGNALS_POLL_MS);
+    signalsTimer = setInterval(() => {
+      pollSignals();
+      pollComments();
+    }, SIGNALS_POLL_MS);
     pollSignals(); // send initial signals immediately, don't wait 8s
-    console.log('[FactLens] Content script loaded (captions + page signals + video state).');
+    pollComments();
+    console.log('[FactLens] Content script loaded (captions + page signals + comments + video state).');
   }
+
+  // ── Session hand-shake ──
+  // These pollers are per-page, not per-session: they start at page load and
+  // run until navigation, in every frame. The background worker simply ignored
+  // whatever arrived outside a session, which mostly worked — except that the
+  // dedup state above (lastSnapshot / lastSignals / lastVideoPaused) lives in
+  // the page and never reset. So on a SECOND session for the same page, the
+  // page title was byte-identical, pollSignals returned early, PAGE_SIGNALS was
+  // never re-sent, and scheduleFastCheck never ran — silently falling the
+  // second session back to the slow 20s timer.
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== 'SESSION_STARTED') return;
+    lastSnapshot     = '';
+    lastSignals      = '';
+    lastVideoPaused  = null;
+    lastCommentCount = 0;
+    if (IS_TOP_FRAME) { pollSignals(); pollComments(); } // re-send immediately for the new session
+  });
 })();

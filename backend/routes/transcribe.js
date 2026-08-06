@@ -80,10 +80,14 @@ router.post('/', upload.single('audio'), async (req, res, next) => {
       `chunk.${extension}`
     );
 
+    const startedAt = Date.now();
     const response = await fetch(WHISPER_URL, {
       method: 'POST',
       headers: { Authorization: `Bearer ${groqKey}` },
       body: formData,
+      // Bare fetch has no timeout of its own; without this a stalled upload
+      // outlives the extension's 30s abort and holds a throttle slot for nothing.
+      signal: AbortSignal.timeout(20_000),
     });
 
     if (!response.ok) {
@@ -99,7 +103,7 @@ router.post('/', upload.single('audio'), async (req, res, next) => {
     const text     = data.text?.trim() ?? '';
     const language = data.language ?? null;
 
-    console.log(`[/transcribe] Language: ${language} | "${text.slice(0, 80)}${text.length > 80 ? '…' : ''}"`);
+    console.log(`[/transcribe] whisper=${Date.now() - startedAt}ms | Language: ${language} | "${text.slice(0, 80)}${text.length > 80 ? '…' : ''}"`);
     return res.json({ text, language });
 
   } catch (err) {

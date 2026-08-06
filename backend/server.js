@@ -10,19 +10,26 @@ import transcribeRouter from './routes/transcribe.js';
 import factcheckRouter from './routes/factcheck.js';
 import coverageRouter from './routes/coverage.js';
 import discussionRouter from './routes/discussion.js';
-import { getStatus } from './lib/apiStatus.js';
+import { getStatus, isRealKey } from './lib/apiStatus.js';
 import { requestThrottle, getBudgets } from './lib/rateLimit.js';
 
-// We allow key overrides from the extension/web UI, so missing .env keys are warnings.
+// We allow key overrides from the extension/web UI, so unusable .env keys are
+// warnings, not failures. "Unusable" includes the gsk_... / tvly-... placeholders
+// copied straight out of .env.example — those look set but fail every call, and
+// silently treating them as configured is worse than having nothing at all.
 const RECOMMENDED_KEYS = ['GROQ_API_KEY', 'TAVILY_API_KEY'];
-const missing = RECOMMENDED_KEYS.filter(k => !process.env[k]);
+const missing = RECOMMENDED_KEYS.filter(k => !isRealKey(process.env[k]));
 if (missing.length > 0) {
-  console.warn(`[FactLens] ${missing.join(', ')} not set in backend/.env.`);
+  const placeholders = missing.filter(k => process.env[k]);
+  if (placeholders.length > 0) {
+    console.warn(`[FactLens] ${placeholders.join(', ')} still hold the .env.example placeholder value — every call using them will fail with 401.`);
+  }
+  console.warn(`[FactLens] ${missing.join(', ')} not usable from backend/.env.`);
   console.warn('[FactLens] Requests must then supply keys via the extension\'s Settings page (X-Groq-Key / X-Tavily-Key headers), or they will fail.');
 }
 
 // NewsAPI is optional because core statement checks can still run without it.
-if (!process.env.NEWSAPI_KEY) {
+if (!isRealKey(process.env.NEWSAPI_KEY)) {
   console.warn('[FactLens] NEWSAPI_KEY not set - multi-outlet coverage analysis (/coverage) is disabled unless supplied via the extension Settings page.');
 }
 

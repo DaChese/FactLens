@@ -183,6 +183,34 @@ main {
   line-height: 1.5;
 }
 
+/* Verbatim public-reaction quotes — indented and ruled so they read clearly as
+   someone else's words rather than FactLens's own summary. */
+.quote-list {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+}
+
+.quote {
+  border-left: 3px solid var(--line);
+  padding-left: 14px;
+  margin-bottom: 14px;
+}
+
+.quote-text {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-style: italic;
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+
+.quote-source {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
 .intro p {
   max-width: 700px;
   font-size: 17px;

@@ -150,6 +150,7 @@
     return {
       available: raw.available !== false,
       story: raw.story || null,
+      storyDate: raw.story_date || null,
       query: raw.query || null,
       confidence: raw.confidence || null,
       matchedOn: Array.isArray(raw.matched_on) ? raw.matched_on : [],
@@ -169,15 +170,40 @@
       claim: claim.claim || 'Not available',
       verdict: claim.verdict || 'Unverified',
       reasoning: claim.reasoning || '',
-      sources: Array.isArray(claim.sources) ? claim.sources : [],
+      // Sources used to be bare URL strings, and the backend's 1-hour verdict
+      // cache can still hold that shape — normalise both to one object here so
+      // the renderer doesn't have to care.
+      sources: Array.isArray(claim.sources)
+        ? claim.sources.map((s) => (typeof s === 'string'
+            ? { url: s, publishedDate: null }
+            : { url: s?.url, publishedDate: s?.publishedDate || null })).filter((s) => s.url)
+        : [],
     }));
+  }
+
+  /**
+   * Short readable date, or null when missing/unparseable.
+   *
+   * Formatted in UTC deliberately: sources report a publication calendar date,
+   * usually as midnight UTC, and rendering that in local time shows the previous
+   * day for every viewer west of UTC.
+   */
+  function formatDate(value) {
+    if (!value) return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toLocaleDateString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC',
+    });
   }
 
   function normalizeDiscussion(raw) {
     return {
       available: raw.available !== false,
       summary: raw.summary || null,
+      quotes: Array.isArray(raw.quotes) ? raw.quotes : [],
       sources: Array.isArray(raw.sources) ? raw.sources : [],
+      platforms: Array.isArray(raw.platforms) ? raw.platforms : [],
     };
   }
 
@@ -271,6 +297,8 @@
     const storySection = el('section', note.lowConfidence ? 'result-section low-confidence' : 'result-section');
     append(storySection, el('h3', null, 'Identified story'));
     storySection.appendChild(el('p', 'story-title', note.story));
+    const storyWhen = formatDate(note.storyDate);
+    if (storyWhen) storySection.appendChild(el('p', 'note-meta', `Story dated ${storyWhen}`));
     if (note.query) storySection.appendChild(el('p', 'note-meta', `Search query: ${note.query}`));
     storySection.appendChild(el('p', 'note-meta', storyMatchText(note)));
     if (note.outletBias) {
@@ -334,7 +362,9 @@
         const li = el('li');
         const title = article.title || `${article.outlet || 'Source'} article`;
         li.appendChild(sourceLink(article.url, title));
-        li.appendChild(el('span', 'source-meta', `${article.outlet || domainLabel(article.url)} · ${biasLabel(article.bias)}`));
+        const when = formatDate(article.publishedAt);
+        const meta = `${article.outlet || domainLabel(article.url)} · ${biasLabel(article.bias)}${when ? ` · ${when}` : ''}`;
+        li.appendChild(el('span', 'source-meta', meta));
         list.appendChild(li);
       });
       section.appendChild(list);
@@ -364,9 +394,11 @@
         if (claim.reasoning) li.appendChild(el('p', 'note-meta', claim.reasoning));
         if (claim.sources.length) {
           const sources = el('p', 'source-row', 'Sources: ');
-          claim.sources.forEach((url, index) => {
+          claim.sources.forEach((source, index) => {
             if (index > 0) sources.appendChild(document.createTextNode(', '));
-            sources.appendChild(sourceLink(url, domainLabel(url)));
+            const shown = formatDate(source.publishedDate);
+            const label = shown ? `${domainLabel(source.url)} · ${shown}` : domainLabel(source.url);
+            sources.appendChild(sourceLink(source.url, label));
           });
           li.appendChild(sources);
         }
@@ -382,15 +414,36 @@
     append(section, el('h3', null, 'Public reaction'));
     if (!discussion.available) {
       section.appendChild(el('p', 'placeholder', 'Add a Tavily key before checking public reaction.'));
-    } else if (!discussion.summary) {
+    } else if (!discussion.summary && discussion.quotes.length === 0) {
       section.appendChild(el('p', 'placeholder', 'Not enough public discussion found to summarize yet.'));
     } else {
-      section.appendChild(el('p', 'note-summary', discussion.summary));
+      if (discussion.summary) section.appendChild(el('p', 'note-summary', discussion.summary));
+
+      // Verbatim quotes. Each is checked against its source backend-side before
+      // it gets here, so nothing shown is paraphrased or invented.
+      if (discussion.quotes.length) {
+        const list = el('ul', 'quote-list');
+        discussion.quotes.forEach((quote) => {
+          const li = el('li', 'quote');
+          li.appendChild(el('p', 'quote-text', `“${quote.text}”`));
+          const when = formatDate(quote.publishedDate);
+          const label = when ? `${quote.platform} · ${when}` : quote.platform;
+          const attribution = el('p', 'quote-source');
+          attribution.appendChild(quote.url ? sourceLink(quote.url, label) : el('span', null, label));
+          li.appendChild(attribution);
+          list.appendChild(li);
+        });
+        section.appendChild(list);
+      }
+
       if (discussion.sources.length) {
         const sources = el('p', 'source-row', 'Sources: ');
         discussion.sources.forEach((source, index) => {
           if (index > 0) sources.appendChild(document.createTextNode(', '));
-          sources.appendChild(sourceLink(source.url, source.title || domainLabel(source.url)));
+          const base  = source.platform || domainLabel(source.url);
+          const shown = formatDate(source.publishedDate);
+          const label = shown ? `${base} · ${shown}` : base;
+          sources.appendChild(sourceLink(source.url, label));
         });
         section.appendChild(sources);
       }

@@ -70,6 +70,7 @@ function buildKeyHeaders(settings) {
 // ~200 words ≈ the last 1-2 minutes of speech.
 const BUFFER_MAX_WORDS  = 200;
 const transcriptBuffers = {}; // tabId → string[]
+const transcriptWordsSeen = {}; // tabId → running total of words ever buffered (never trimmed)
 
 // How long after the last caption snapshot we still trust the caption buffer
 // as the transcript source (instead of paying for a Whisper call).
@@ -81,6 +82,11 @@ const lastCaptionAt      = {}; // tabId → timestamp of last caption text
 // the backend to cross-check the identified story ("checks and balances").
 const pageSignals = {}; // tabId → { pageTitle, onScreenText }
 
+// Comments scraped from the page being watched — the most on-topic "what does
+// the public think" signal available, since they're attached to this exact video
+// or article rather than found by a search that might match the wrong story.
+const pageComments = {}; // tabId → string[]
+
 // Detected language per tab (from Whisper) — captions don't provide one.
 const detectedLanguages = {}; // tabId → "english" | "spanish" | ...
 
@@ -89,6 +95,9 @@ const detectedLanguages = {}; // tabId → "english" | "spanish" | ...
 const noteBuilding       = {}; // tabId → boolean guard (one note at a time)
 const lastNoteTranscript = {}; // tabId → { text, language } for CHECK_CLAIMS
 const lastNoteQuery      = {}; // tabId → search query (from /coverage) for CHECK_DISCUSSION
+const lastNoteStory      = {}; // tabId → story headline, sent with the query so /discussion can judge relevance
+const lastNoteComments   = {}; // tabId → comments captured with the note, for CHECK_DISCUSSION after the session ends
+const lastNoteDate       = {}; // tabId → when the story broke, so /discussion looks for reaction from then, not today
 const pendingAudio       = {}; // tabId → { resolve, reject, timer } awaiting AUDIO_CHUNK
 
 // How long after Start to automatically run one Check-now-equivalent pass if
@@ -114,9 +123,43 @@ const autoCheckFired = {}; // tabId → true once the automatic check process is
 // improving with more time. Bounded on purpose: "keep trying" must not mean
 // "keep trying forever" and silently draining the API budget.
 const MAX_AUTO_CHECK_ATTEMPTS   = 3;  // the original attempt + up to 2 retries
-const AUTO_CHECK_RETRY_DELAY_MS = 15000; // time between retries for more context to accumulate
+
+// Retries wait for NEW INFORMATION, not for the clock. A retry with the same
+// transcript and the same page signals asks the same question and gets the
+// same answer, so it can only waste a NewsAPI call and 15 seconds of the
+// viewer's time. Instead we poll cheaply and fire as soon as there's actually
+// something new to work with — usually well before the old fixed delay.
+const AUTO_CHECK_RETRY_POLL_MS  = 4000;  // how often to check whether new material arrived
+const AUTO_CHECK_RETRY_MAX_MS   = 15000; // ceiling per retry — the old fixed delay, now a worst case
+const RETRY_MIN_NEW_WORDS       = 15;    // enough new speech to plausibly change the answer
 const autoCheckAttempts = {}; // tabId → number of attempts made this session
 const lastAttemptGuess  = {}; // tabId → { story, query } from a previous non-final attempt
+const lastAttemptInput  = {}; // tabId → { words, signals } snapshot at the last attempt
+const rejectedStories   = {}; // tabId → stories the viewer marked "not helpful", so we don't offer them again
+
+// Bumped on every Start. Timer callbacks capture the value they were scheduled
+// under and bail if it has moved on, so a callback left over from a stopped
+// session can never act on — or cancel the timers of — the session that
+// replaced it. Several scheduling paths set a timer only after an await, and
+// a Stop during that await would otherwise leave a live timer behind.
+const sessionGeneration = {}; // tabId → integer
+
+function currentGeneration(tabId) {
+  return sessionGeneration[tabId] ?? 0;
+}
+
+// ── Session watchdog ──
+// Driven by the offscreen document's heartbeat (see offscreen.js), because that
+// is the only timer MV3 cannot suspend. Its job is purely terminal: end sessions
+// that have run too long, or that are flagged active with nothing left to run.
+//
+// It never RESUMES the pipeline. After a worker restart every in-memory input is
+// empty — no page signals, no caption buffer, no cached captions — so resuming
+// would pay for a Whisper call and a /coverage call to produce a note built from
+// nothing. Stopping is both cheaper and more honest.
+const MAX_SESSION_MS   = 5 * 60 * 1000; // hard cap; offscreen's own cap is 6 min
+const WATCHDOG_STRIKES = 2;             // ~30s of "nothing scheduled" before acting
+const watchdogStrikes  = {};            // tabId → consecutive idle heartbeats
 
 // Opening the panel is deliberately inert — it never starts a session on its
 // own. Session control lives entirely in the panel's Start/Stop buttons.
@@ -128,9 +171,15 @@ chrome.action.onClicked.addListener((tab) => {
 
 // ─── Session State ───────────────────────────────────────────────────────────
 
+// chrome.storage.session is the ONLY state that survives a service-worker
+// suspension — every in-memory object above is rebuilt empty. The session
+// record therefore carries the two facts the watchdog cannot recompute:
+// when the session began (for the wall-clock cap) and how many attempts have
+// been spent (so MAX_AUTO_CHECK_ATTEMPTS isn't silently reset by a restart,
+// which would allow unbounded /coverage spend).
 async function setSessionActive(tabId) {
   const { activeSessions = {} } = await chrome.storage.session.get('activeSessions');
-  activeSessions[tabId] = true;
+  activeSessions[tabId] = { startedAt: Date.now(), attempts: 0 };
   await chrome.storage.session.set({ activeSessions });
 }
 
@@ -143,6 +192,23 @@ async function clearSessionActive(tabId) {
 async function getSessionActive(tabId) {
   const { activeSessions = {} } = await chrome.storage.session.get('activeSessions');
   return !!activeSessions[tabId];
+}
+
+/** The stored record for a session, or null. Tolerates the older `true` shape. */
+async function getSessionRecord(tabId) {
+  const { activeSessions = {} } = await chrome.storage.session.get('activeSessions');
+  const record = activeSessions[tabId];
+  if (!record) return null;
+  return typeof record === 'object' ? record : { startedAt: Date.now(), attempts: 0 };
+}
+
+/** Persist the attempt count so the retry cap survives a worker restart. */
+async function persistAttempts(tabId, attempts) {
+  const { activeSessions = {} } = await chrome.storage.session.get('activeSessions');
+  if (!activeSessions[tabId]) return; // session ended mid-write — don't resurrect it
+  if (typeof activeSessions[tabId] !== 'object') activeSessions[tabId] = { startedAt: Date.now() };
+  activeSessions[tabId].attempts = attempts;
+  await chrome.storage.session.set({ activeSessions });
 }
 
 // ─── Session Management ──────────────────────────────────────────────────────
@@ -159,9 +225,15 @@ async function startSession(tab) {
   videoPaused[tab.id] = false;
   autoCheckFired[tab.id] = false;
   autoCheckAttempts[tab.id] = 0;
+  transcriptWordsSeen[tab.id] = 0;
+  sessionGeneration[tab.id] = currentGeneration(tab.id) + 1;
   delete lastAttemptGuess[tab.id];
+  delete lastAttemptInput[tab.id];
+  // A fresh Start is a clean slate. retryAfterRejection reapplies its list
+  // after calling this, so rejections survive a thumbs-down restart.
+  delete rejectedStories[tab.id];
 
-  broadcast({ type: 'STATUS', payload: 'listening' });
+  const generation = sessionGeneration[tab.id];
 
   try {
     const streamId = await new Promise((resolve, reject) => {
@@ -177,6 +249,14 @@ async function startSession(tab) {
       );
     });
 
+    // Setup awaits above. A Stop pressed during them already tore this session
+    // down — starting the recorder now would leave audio capture running with
+    // no session record able to stop it.
+    if (generation !== currentGeneration(tab.id) || !(await getSessionActive(tab.id))) {
+      console.log(`[FactLens] Session for tab ${tab.id} was stopped during setup — not starting capture`);
+      return;
+    }
+
     await ensureOffscreenDocument();
 
     chrome.runtime.sendMessage({
@@ -187,6 +267,15 @@ async function startSession(tab) {
 
     autoCheckTimers[tab.id] = setTimeout(() => autoRunAndStop(tab.id), AUTO_CHECK_MAX_WAIT_MS);
 
+    // Tell the page's content scripts a new session began so they reset their
+    // change-detection state and re-send page signals. Without this a second
+    // session on the same page never gets PAGE_SIGNALS (the title hasn't
+    // changed, so its dedup swallows it) and falls back to the slow timer.
+    chrome.tabs.sendMessage(tab.id, { type: 'SESSION_STARTED' }).catch(() => {});
+
+    // Only now is the session real. Announcing 'listening' before this point
+    // showed a Stop button over a session that wasn't capturing yet.
+    broadcast({ type: 'STATUS', payload: 'listening' });
     console.log(`[FactLens] Session started for tab ${tab.id} (on-demand mode)`);
 
   } catch (err) {
@@ -195,6 +284,9 @@ async function startSession(tab) {
     broadcast({ type: 'STATUS', payload: 'idle' });
     await clearSessionActive(tab.id);
     cleanupTabState(tab.id);
+    // The failure may have come after the document was created — without this
+    // it survives with nothing tracking it.
+    await closeOffscreenDocument();
   }
 }
 
@@ -212,17 +304,31 @@ async function startSession(tab) {
  */
 async function autoRunAndStop(tabId) {
   delete autoCheckTimers[tabId];
+  const generation = currentGeneration(tabId);
   if (!(await getSessionActive(tabId))) return; // stopped manually before this fired
 
-  autoCheckAttempts[tabId] = (autoCheckAttempts[tabId] ?? 0) + 1;
+  // Fall back to the persisted count when the in-memory one is missing, which
+  // happens only after a worker restart. Without this the cap silently resets
+  // and the session can spend another full round of /coverage calls.
+  const priorAttempts = autoCheckAttempts[tabId] ?? (await getSessionRecord(tabId))?.attempts ?? 0;
+  autoCheckAttempts[tabId] = priorAttempts + 1;
+  await persistAttempts(tabId, autoCheckAttempts[tabId]);
+
   const outcome = await buildNote(tabId);
+
+  // buildNote can take up to REQUEST_TIMEOUT_MS. A Stop during that window
+  // already tore this session down, so anything scheduled below would run
+  // against a dead session — or worse, against whatever the user started next.
+  if (generation !== currentGeneration(tabId)) return;
+  if (!(await getSessionActive(tabId))) return;
 
   const retryable = outcome === 'no_story' || outcome === 'low_confidence' || outcome === 'insufficient_input';
   const canRetry  = autoCheckAttempts[tabId] < MAX_AUTO_CHECK_ATTEMPTS;
 
   if (retryable && canRetry) {
-    console.log(`[FactLens] Attempt ${autoCheckAttempts[tabId]}/${MAX_AUTO_CHECK_ATTEMPTS} (${outcome}) — still listening, retrying in ${AUTO_CHECK_RETRY_DELAY_MS / 1000}s`);
-    autoCheckTimers[tabId] = setTimeout(() => autoRunAndStop(tabId), AUTO_CHECK_RETRY_DELAY_MS);
+    console.log(`[FactLens] Attempt ${autoCheckAttempts[tabId]}/${MAX_AUTO_CHECK_ATTEMPTS} (${outcome}) — still listening, waiting for new material`);
+    lastAttemptInput[tabId] = snapshotInput(tabId);
+    scheduleRetryWhenReady(tabId, Date.now(), generation);
     return; // keep the session alive — do NOT stop
   }
 
@@ -231,6 +337,65 @@ async function autoRunAndStop(tabId) {
   }
   autoCheckFired[tabId] = true; // fully done — either a result landed or the cap was hit
   await stopSession(tabId);
+}
+
+/**
+ * What the last attempt actually had to work with. Compared against the
+ * current state to decide whether a retry would be asking a new question.
+ * @param {number} tabId
+ */
+function snapshotInput(tabId) {
+  const signals = pageSignals[tabId];
+  return {
+    words:   transcriptWordsSeen[tabId] ?? 0,
+    signals: signals ? `${signals.pageTitle ?? ''} ${signals.onScreenText ?? ''}` : '',
+  };
+}
+
+/**
+ * Poll until there's genuinely new information, then run the next attempt.
+ * Fires early when captions are flowing (the common case), and never fires at
+ * all when nothing changed — an identical request can only return an identical
+ * result, so spending a NewsAPI call on it is pure waste.
+ * @param {number} tabId
+ * @param {number} waitingSince - timestamp the current retry wait began
+ */
+function scheduleRetryWhenReady(tabId, waitingSince, generation = currentGeneration(tabId)) {
+  const handle = setTimeout(async () => {
+    // Only vacate the slot if this is still OUR timer. A newer session may have
+    // installed its own handle here, and deleting the key blindly would orphan
+    // that one — leaving a timer nothing can cancel.
+    if (autoCheckTimers[tabId] === handle) delete autoCheckTimers[tabId];
+    if (generation !== currentGeneration(tabId)) return; // a newer session owns this tab
+    if (!(await getSessionActive(tabId))) return; // stopped manually
+    if (videoPaused[tabId]) return;               // PAUSE cleared the timer; resume re-arms it
+
+    const before = lastAttemptInput[tabId] ?? { words: 0, signals: '' };
+    const now    = snapshotInput(tabId);
+    const newWords       = now.words - before.words;
+    const signalsChanged = now.signals !== before.signals;
+    const waited         = Date.now() - waitingSince;
+
+    if (newWords >= RETRY_MIN_NEW_WORDS || signalsChanged) {
+      console.log(`[FactLens] Retrying after ${(waited / 1000).toFixed(1)}s (+${newWords} words${signalsChanged ? ', page signals changed' : ''})`);
+      return autoRunAndStop(tabId);
+    }
+
+    if (waited >= AUTO_CHECK_RETRY_MAX_MS) {
+      if (newWords > 0) {
+        console.log(`[FactLens] Retrying after ${(waited / 1000).toFixed(1)}s with only +${newWords} words — no more is coming`);
+        return autoRunAndStop(tabId);
+      }
+      // Nothing new at all. Another attempt would send byte-identical input.
+      console.log(`[FactLens] No new material after ${(waited / 1000).toFixed(1)}s — stopping rather than repeating an identical check`);
+      autoCheckFired[tabId] = true;
+      await stopSession(tabId);
+      return;
+    }
+
+    scheduleRetryWhenReady(tabId, waitingSince, generation);
+  }, AUTO_CHECK_RETRY_POLL_MS);
+  autoCheckTimers[tabId] = handle;
 }
 
 function clearAutoCheckTimer(tabId) {
@@ -251,11 +416,18 @@ function clearAutoCheckTimer(tabId) {
 async function rescheduleAfterResume(tabId) {
   if (autoCheckFired[tabId]) return;      // fully done — no more attempts coming
   if (autoCheckTimers[tabId]) return;     // something's already pending
+  const generation = currentGeneration(tabId);
   if (!(await getSessionActive(tabId))) return;
+  if (generation !== currentGeneration(tabId)) return; // restarted during the storage read
 
-  const delay = (autoCheckAttempts[tabId] ?? 0) > 0
-    ? AUTO_CHECK_RETRY_DELAY_MS
-    : (pageSignals[tabId] ? AUTO_CHECK_FAST_DELAY_MS : AUTO_CHECK_MAX_WAIT_MS);
+  // Mid-retry when the pause hit: go back to waiting for new material rather
+  // than firing immediately, since a pause means nothing new arrived.
+  if ((autoCheckAttempts[tabId] ?? 0) > 0) {
+    scheduleRetryWhenReady(tabId, Date.now(), generation);
+    return;
+  }
+
+  const delay = pageSignals[tabId] ? AUTO_CHECK_FAST_DELAY_MS : AUTO_CHECK_MAX_WAIT_MS;
   autoCheckTimers[tabId] = setTimeout(() => autoRunAndStop(tabId), delay);
 }
 
@@ -270,7 +442,9 @@ async function rescheduleAfterResume(tabId) {
  */
 async function scheduleFastCheck(tabId) {
   if (fastCheckScheduled[tabId]) return;
+  const generation = currentGeneration(tabId);
   if (!(await getSessionActive(tabId))) return;
+  if (generation !== currentGeneration(tabId)) return; // stopped/restarted during the storage read
   fastCheckScheduled[tabId] = true;
 
   clearAutoCheckTimer(tabId);
@@ -284,13 +458,138 @@ async function scheduleFastCheck(tabId) {
  * already built, even after the session auto-stops.
  * @param {number} tabId
  */
+/**
+ * "Not helpful" — the identified story was wrong. Rather than dismissing the
+ * note and stopping, resume listening and try again with everything already
+ * gathered, telling the backend which story the viewer ruled out.
+ *
+ * The transcript is the valuable part here: it took real time (and possibly a
+ * paid Whisper call) to collect, and it's still perfectly good evidence — only
+ * the conclusion drawn from it was wrong. Restarting from an empty buffer would
+ * throw that away and make the viewer wait through it all again.
+ * @param {string|null} rejectedStory
+ */
+async function retryAfterRejection(rejectedStory) {
+  const tabId = Object.keys(lastNoteTranscript).map(Number)[0];
+  if (!tabId) return;
+
+  // Build the new rejection list BEFORE restarting — startSession clears it,
+  // along with the rest of the per-session state, so it has to be reapplied
+  // afterwards rather than set here.
+  const ruledOut = rejectedStory
+    ? [...(rejectedStories[tabId] ?? []), rejectedStory].slice(-5)
+    : (rejectedStories[tabId] ?? []);
+
+  // Carry the collected transcript across, and clear the guess that produced the
+  // rejected answer so the next pass isn't nudged straight back to it.
+  const carriedTranscript = lastNoteTranscript[tabId]?.text ?? '';
+
+  const wasActive = await getSessionActive(tabId);
+  if (!wasActive) {
+    // The session had already auto-stopped. Start a fresh one so we keep
+    // listening for the material that will identify the right story.
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      await startSession(tab);
+    } catch (err) {
+      console.warn('[FactLens] Could not restart session after rejection:', err.message);
+      return;
+    }
+  } else {
+    clearAutoCheckTimer(tabId);
+  }
+
+  rejectedStories[tabId] = ruledOut;
+  delete lastAttemptGuess[tabId];
+  if (ruledOut.length) {
+    console.log(`[FactLens] Retrying with ${ruledOut.length} story/stories ruled out: ${ruledOut.map(s => `"${s}"`).join(', ')}`);
+  }
+
+  // startSession resets the buffer; re-seed it with what we already had so the
+  // viewer doesn't wait through re-collecting speech we already transcribed.
+  if (carriedTranscript) {
+    transcriptBuffers[tabId] = carriedTranscript.split(/\s+/).slice(-BUFFER_MAX_WORDS);
+    transcriptWordsSeen[tabId] = transcriptBuffers[tabId].length;
+  }
+
+  broadcast({ type: 'PROGRESS', payload: 'Looking for a different story…' });
+  autoRunAndStop(tabId);
+}
+
+/**
+ * Watchdog tick from the offscreen document. Receiving this also resets the
+ * worker's 30s idle timer, which is what makes the ordinary setTimeout
+ * scheduling elsewhere in this file reliable for the life of a session.
+ * @param {number} tabId
+ */
+async function handleHeartbeat(tabId) {
+  if (!tabId) return;
+
+  const record = await getSessionRecord(tabId);
+  if (!record) {
+    // Recording audio for a session nothing remembers — the worker restarted
+    // after the session was cleared, or teardown half-failed. Close it.
+    console.warn(`[FactLens] Heartbeat for unknown session ${tabId} — closing offscreen document`);
+    chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }).catch(() => {});
+    await closeOffscreenDocument();
+    delete watchdogStrikes[tabId];
+    return;
+  }
+
+  if (Date.now() - record.startedAt > MAX_SESSION_MS) {
+    console.warn(`[FactLens] Session cap (${MAX_SESSION_MS / 1000}s) reached for tab ${tabId} — stopping`);
+    delete watchdogStrikes[tabId];
+    autoCheckFired[tabId] = true;
+    await stopSession(tabId);
+    return;
+  }
+
+  // Is anything actually going to happen? All three are in-memory, so after a
+  // worker restart they're empty by construction — which is exactly the signal.
+  if (autoCheckTimers[tabId] || noteBuilding[tabId] || pendingAudio[tabId]) {
+    delete watchdogStrikes[tabId];
+    return;
+  }
+
+  // Two strikes before acting: several paths legitimately have no timer for a
+  // moment (scheduleFastCheck and rescheduleAfterResume both await a storage
+  // read before arming, and VIDEO_PAUSED clears the timer on purpose).
+  watchdogStrikes[tabId] = (watchdogStrikes[tabId] ?? 0) + 1;
+  if (watchdogStrikes[tabId] < WATCHDOG_STRIKES) return;
+
+  console.warn(`[FactLens] Watchdog: tab ${tabId} is active with no scheduled work — stopping`);
+  delete watchdogStrikes[tabId];
+  autoCheckFired[tabId] = true;
+  await stopSession(tabId);
+}
+
+/**
+ * Broadcast whichever status is actually true right now.
+ *
+ * The three async workflows below all used to end with an unconditional
+ * broadcast of 'listening'. That is wrong whenever the session already
+ * ended — and for "Check statements" / "Check public reaction" it is wrong
+ * BY DESIGN, since both are built to run after the session auto-stops. The
+ * result was a panel showing "Listening" with a Stop button over a session
+ * that no longer existed, which is what makes Stop look broken.
+ * @param {number} tabId
+ */
+async function broadcastLiveStatus(tabId) {
+  const active = await getSessionActive(tabId);
+  broadcast({ type: 'STATUS', payload: active ? 'listening' : 'idle' });
+}
+
 async function stopSession(tabId) {
+  // Clear the session flag FIRST. Teardown below awaits, and every timer
+  // callback guards on getSessionActive() — so while this flag is still true,
+  // an in-flight callback can pass its guard and schedule new work against a
+  // session we are in the middle of destroying.
+  await clearSessionActive(tabId);
   clearCaptureState(tabId);
 
   chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }).catch(() => {});
 
   await closeOffscreenDocument();
-  await clearSessionActive(tabId);
   broadcast({ type: 'STATUS', payload: 'idle' });
   console.log(`[FactLens] Session stopped for tab ${tabId}`);
 }
@@ -307,12 +606,16 @@ function clearCaptureState(tabId) {
   delete lastCaptions[tabId];
   delete lastCaptionAt[tabId];
   delete pageSignals[tabId];
+  delete pageComments[tabId];
   delete noteBuilding[tabId];
   delete fastCheckScheduled[tabId];
   delete videoPaused[tabId];
   delete autoCheckFired[tabId];
   delete autoCheckAttempts[tabId];
   delete lastAttemptGuess[tabId];
+  delete lastAttemptInput[tabId];
+  delete transcriptWordsSeen[tabId];
+  delete watchdogStrikes[tabId];
   clearAutoCheckTimer(tabId);
   if (pendingAudio[tabId]) {
     clearTimeout(pendingAudio[tabId].timer);
@@ -330,6 +633,9 @@ function cleanupTabState(tabId) {
   clearCaptureState(tabId);
   delete lastNoteTranscript[tabId];
   delete lastNoteQuery[tabId];
+  delete lastNoteStory[tabId];
+  delete lastNoteComments[tabId];
+  delete lastNoteDate[tabId];
 }
 
 // ─── Offscreen Document Management ──────────────────────────────────────────
@@ -398,6 +704,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       break;
 
+    // Comments on the video/article being watched. Free, local, and inherently
+    // about this exact content — no story-matching step that can go wrong.
+    case 'PAGE_COMMENTS':
+      if (sender.tab?.id && Array.isArray(message.payload?.comments)) {
+        pageComments[sender.tab.id] = message.payload.comments;
+      }
+      break;
+
     // Video paused/resumed (from content.js) — hold off the automatic check
     // while paused so it doesn't spend an API call on a stale moment, and
     // pick back up when playback resumes.
@@ -436,12 +750,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Cancels the pending auto-check timer first so Start's automatic pass
     // never double-fires on top of a manual one.
     case 'ANALYZE_NOW':
-      chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {
-        Object.keys(activeSessions).forEach(tabId => {
-          clearAutoCheckTimer(Number(tabId));
-          buildNote(Number(tabId));
-        });
+      chrome.storage.session.get('activeSessions').then(async ({ activeSessions = {} }) => {
+        for (const key of Object.keys(activeSessions)) {
+          const tabId = Number(key);
+          const generation = currentGeneration(tabId);
+          clearAutoCheckTimer(tabId);
+          await buildNote(tabId);
+
+          // A manual check IS the session's one note — "press Start, see what
+          // it's about, done". This used to return with nothing scheduled,
+          // leaving an active session with no pending work, which idles the
+          // worker out and strands the recorder. Stopping costs the viewer
+          // nothing: clearCaptureState deliberately keeps the note's transcript
+          // and query, so "Check statements" and "Check public reaction" still
+          // work afterwards.
+          if (generation !== currentGeneration(tabId)) continue; // Stop/Start raced us
+          if (!(await getSessionActive(tabId))) continue;
+          autoCheckFired[tabId] = true;
+          await stopSession(tabId);
+        }
       });
+      break;
+
+    // Watchdog messages from the offscreen document (see offscreen.js).
+    case 'SESSION_HEARTBEAT':
+      handleHeartbeat(message.tabId);
+      break;
+
+    case 'SESSION_TIMEOUT':
+      console.warn(`[FactLens] Offscreen recording cap fired for tab ${message.tabId}`);
+      if (message.tabId) stopSession(message.tabId);
       break;
 
     // "Check statements" / "Check public reaction" on the note — these only
@@ -484,6 +822,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.warn('[FactLens] sendNoteFeedback error:', err.message);
         });
       }
+      // "Not helpful" means we got the story wrong — so try again rather than
+      // just dismissing. Everything already collected (transcript, captions,
+      // page signals) still applies; only the conclusion drawn from it was wrong.
+      if (message.helpful === false) {
+        retryAfterRejection(message.story ?? null).catch((err) => {
+          console.warn('[FactLens] retryAfterRejection error:', err.message);
+        });
+      }
       break;
 
     // In-panel Start button — same effect as clicking the toolbar icon while idle,
@@ -497,8 +843,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case 'STOP_SESSION':
-      chrome.storage.session.get('activeSessions').then(({ activeSessions = {} }) => {
-        Object.keys(activeSessions).forEach(tabId => stopSession(Number(tabId)));
+      chrome.storage.session.get('activeSessions').then(async ({ activeSessions = {} }) => {
+        const tabIds = Object.keys(activeSessions);
+        await Promise.all(tabIds.map(tabId => stopSession(Number(tabId))));
+        // Always land the sidebar on idle, even when there was nothing to stop.
+        // The panel can get stuck showing "Listening" with no active session
+        // (a lost STATUS broadcast, or a follow-up check that re-broadcast
+        // 'listening' after the session ended). If Stop can't fix that, the
+        // only escape is closing and reopening the panel — so Stop always
+        // reports idle, whether or not it had work to do.
+        if (tabIds.length === 0) {
+          console.log('[FactLens] Stop pressed with no active session — resyncing panel to idle');
+          broadcast({ type: 'STATUS', payload: 'idle' });
+        }
       });
       break;
 
@@ -542,7 +899,12 @@ async function handleCaptionText(tabId, text) {
   if (!newText || newText.trim().length === 0) return;
 
   if (!transcriptBuffers[tabId]) transcriptBuffers[tabId] = [];
-  transcriptBuffers[tabId].push(...newText.trim().split(/\s+/));
+  const words = newText.trim().split(/\s+/);
+  transcriptBuffers[tabId].push(...words);
+  // Monotonic running total. The buffer itself is capped below, so its length
+  // saturates at BUFFER_MAX_WORDS and can't be used to tell whether new speech
+  // has arrived since the last check-now attempt.
+  transcriptWordsSeen[tabId] = (transcriptWordsSeen[tabId] ?? 0) + words.length;
   if (transcriptBuffers[tabId].length > BUFFER_MAX_WORDS) {
     transcriptBuffers[tabId] = transcriptBuffers[tabId].slice(-BUFFER_MAX_WORDS);
   }
@@ -630,6 +992,12 @@ async function buildNote(tabId) {
     });
     const coverage = await fetchCoverage(tabId, text ?? '', language, lastAttemptGuess[tabId] ?? null);
     if (coverage.query) lastNoteQuery[tabId] = coverage.query;
+    if (coverage.story) lastNoteStory[tabId] = coverage.story;
+    if (coverage.story_date) lastNoteDate[tabId] = coverage.story_date;
+    // Snapshot the comments with the note. clearCaptureState wipes the live
+    // pageComments on stop, but "Check public reaction" runs after the session
+    // has ended and still needs them.
+    if (pageComments[tabId]?.length) lastNoteComments[tabId] = pageComments[tabId];
     broadcast({ type: 'COVERAGE', payload: coverage });
 
     if (coverage.available === false) return 'unavailable';
@@ -647,7 +1015,7 @@ async function buildNote(tabId) {
     return 'error';
   } finally {
     noteBuilding[tabId] = false;
-    broadcast({ type: 'STATUS', payload: 'listening' });
+    await broadcastLiveStatus(tabId);
     broadcast({ type: 'NOTE_DONE' });
   }
 }
@@ -674,7 +1042,7 @@ async function runClaimCheck(tabId) {
     console.error('[FactLens] runClaimCheck error:', err.message);
     broadcast({ type: 'ERROR', payload: `Statement check failed: ${err.message}` });
   } finally {
-    broadcast({ type: 'STATUS', payload: 'listening' });
+    await broadcastLiveStatus(tabId);
     broadcast({ type: 'CLAIMS_DONE' });
   }
 }
@@ -697,13 +1065,20 @@ async function runDiscussionCheck(tabId) {
   broadcast({ type: 'STATUS', payload: 'processing' });
   broadcast({ type: 'PROGRESS', payload: `Searching for public reaction to: "${query}"` });
   try {
-    const discussion = await fetchDiscussion(query, lastNoteTranscript[tabId]?.language);
+    const comments = lastNoteComments[tabId] ?? pageComments[tabId] ?? [];
+    const discussion = await fetchDiscussion(
+      query,
+      lastNoteTranscript[tabId]?.language,
+      lastNoteStory[tabId] ?? null,
+      comments,
+      lastNoteDate[tabId] ?? null,
+    );
     broadcast({ type: 'DISCUSSION', payload: discussion });
   } catch (err) {
     console.error('[FactLens] runDiscussionCheck error:', err.message);
     broadcast({ type: 'ERROR', payload: `Public reaction check failed: ${err.message}` });
   } finally {
-    broadcast({ type: 'STATUS', payload: 'listening' });
+    await broadcastLiveStatus(tabId);
     broadcast({ type: 'DISCUSSION_DONE' });
   }
 }
@@ -873,6 +1248,9 @@ async function fetchCoverage(tabId, text, language = 'english', previousGuess = 
       pageTitle:    signals.pageTitle    || null,
       onScreenText: signals.onScreenText || null,
       previousGuess,
+      // Stories the viewer explicitly marked "not helpful" — the backend must
+      // not offer them again.
+      rejectedStories: rejectedStories[tabId] ?? [],
     }),
   });
   if (!res.ok) throw await describeFailedResponse(res);
@@ -882,12 +1260,16 @@ async function fetchCoverage(tabId, text, language = 'english', previousGuess = 
 /**
  * Fetch a public-discussion summary for the note's story query.
  */
-async function fetchDiscussion(query, language = 'english') {
+async function fetchDiscussion(query, language = 'english', story = null, comments = [], storyDate = null) {
   const settings = await getSettings();
   const res = await fetchWithTimeout(`${settings.backendUrl}/discussion`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', ...buildKeyHeaders(settings) },
-    body:    JSON.stringify({ query, language }),
+    // The story headline lets the backend judge whether a result is actually
+    // about this story — the query alone is only 3-6 keywords. Comments are the
+    // reaction to this exact video/article, so they need no matching at all.
+    // storyDate anchors the search on when the story broke rather than today.
+    body:    JSON.stringify({ query, language, story, comments, storyDate }),
   });
   if (!res.ok) throw await describeFailedResponse(res);
   return res.json();

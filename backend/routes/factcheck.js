@@ -126,10 +126,17 @@ Verdict definitions:
 - "False"      — The search results clearly contradict the claim
 - "Unverified" — The search results are inconclusive, irrelevant, or contradictory
 
+Each search result carries a "Published:" date (or "date unknown"). Use it:
+- Prefer recent sources. For a claim about a current event, an old article may
+  describe a superseded state of affairs rather than contradicting the claim
+- If the only supporting evidence is clearly old relative to the claim, say so in
+  the reasoning and lower the confidence rather than treating it as settled
+- Never assume a "date unknown" source is current
+
 Confidence guidelines:
-- 0.9–1.0: Multiple sources clearly agree
+- 0.9–1.0: Multiple recent sources clearly agree
 - 0.7–0.9: One strong source confirms/denies
-- 0.5–0.7: Partial or indirect evidence
+- 0.5–0.7: Partial or indirect evidence, or the evidence is dated
 - 0.0–0.5: Weak or ambiguous evidence → use "Unverified"
 
 Return ONLY a valid JSON object — no markdown, no explanation outside the JSON.
@@ -141,6 +148,113 @@ Output format:
   "reasoning":  "<one sentence explaining the verdict based on the search results>"
 }
 `.trim();
+
+/**
+ * Resolve one claim to a verdict. Never rejects — every failure path returns
+ * an Unverified result instead, so a single bad claim can't collapse the
+ * Promise.all and lose the verdicts that did succeed.
+ *
+ * The Tavily budget for this claim has already been spent by the caller (or
+ * found to be exhausted), so this function never touches spendBudget itself.
+ *
+ * @param {{kind: 'cached'|'run'|'budget', claim: string, cached?: object, err?: Error}} job
+ * @returns {Promise<object>} a verdict result
+ */
+async function runClaim(job, { groq, tavilyClient, replyLanguage }) {
+  const { claim } = job;
+
+  if (job.kind === 'cached') return job.cached;
+
+  if (job.kind === 'budget') {
+    console.warn(`[/factcheck] Budget exhausted before "${claim.slice(0, 50)}"`);
+    return { claim, verdict: 'Unverified', confidence: 0.0, reasoning: job.err.message, sources: [] };
+  }
+
+  try {
+    const searchResult = await recordCall('tavily', tavilyClient.search(claim, {
+      maxResults:    5,
+      searchDepth:   'basic', // 1 Tavily credit instead of 2
+      includeAnswer: true,
+      timeout:       10,      // seconds; the SDK default is 60, past the extension's 30s abort
+    }));
+
+    const tavilyAnswer = searchResult.answer
+      ? `Tavily summary: ${searchResult.answer}\n\n`
+      : '';
+
+    // Tavily returns a publishedDate on every result and we used to discard it.
+    // A verdict backed by a three-year-old article is weaker than one backed by
+    // yesterday's, so the date goes both to the model (below) and to the UI.
+    const sources = (searchResult.results ?? []).map(r => ({
+      url:           r.url,
+      title:         r.title,
+      publishedDate: r.publishedDate || null,
+    }));
+
+    const searchContext = (searchResult.results ?? [])
+      .map((r, i) =>
+        `[${i + 1}] ${r.title}\nURL: ${r.url}\nPublished: ${r.publishedDate || 'date unknown'}\n${r.content?.slice(0, 600) ?? ''}`
+      )
+      .join('\n\n');
+
+    // If Tavily returned no results, mark as Unverified without paying for a verdict call
+    if (sources.length === 0) {
+      console.warn(`[/factcheck] No search results for: "${claim.slice(0, 50)}"`);
+      return { claim, verdict: 'Unverified', confidence: 0.0, reasoning: 'No search results found.', sources: [] };
+    }
+
+    const verdictRes = await recordCall('groq', groq.chat.completions.create({
+      model:       MODEL,
+      max_tokens:  200,
+      temperature: 0.1,
+      // Constrained decoding so a stray prose preamble can't discard a
+      // completed, paid-for call at the JSON.parse below.
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: VERDICT_SYSTEM_PROMPT },
+        {
+          role:    'user',
+          content: `Claim: "${claim}"\nRespond in ${replyLanguage}.\n\n${tavilyAnswer}Search results:\n${searchContext}`,
+        },
+      ],
+    }));
+
+    const cleanedVerdict = verdictRes.choices[0].message.content
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+
+    const parsed = JSON.parse(cleanedVerdict);
+
+    const verdict = ['True', 'False', 'Unverified'].includes(parsed.verdict)
+      ? parsed.verdict
+      : 'Unverified';
+    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence) || 0));
+
+    console.log(`[/factcheck] "${claim.slice(0, 50)}" → ${verdict} (${(confidence * 100).toFixed(0)}%)`);
+
+    const result = {
+      claim,
+      verdict,
+      confidence,
+      reasoning: String(parsed.reasoning || '').slice(0, 300),
+      sources,
+    };
+
+    setCached(claim, result); // repeat claims are instant
+    return result;
+
+  } catch (err) {
+    console.warn(`[/factcheck] Failed on claim "${claim.slice(0, 50)}":`, err.message);
+    return {
+      claim,
+      verdict:    'Unverified',
+      confidence: 0.0,
+      reasoning:  'Could not retrieve search results.',
+      sources:    [],
+    };
+  }
+}
 
 // ─── POST /factcheck ─────────────────────────────────────────────────────────
 
@@ -164,35 +278,54 @@ router.post('/', async (req, res, next) => {
     const replyLanguage  = language === 'spanish' ? 'Spanish' : 'English';
 
     // ── Step 1: Extract verifiable claims ──
-    const extractionRes = await recordCall('groq', groq.chat.completions.create({
-      model:       MODEL,
-      max_tokens:  256,
-      temperature: 0.1,
-      messages: [
-        { role: 'system', content: EXTRACT_SYSTEM_PROMPT },
-        { role: 'user',   content: `Transcript (language: ${replyLanguage}):\n${safeTranscript}` },
-      ],
-    }));
+    const extractClaims = async (extraInstruction = '') => {
+      const extractionRes = await recordCall('groq', groq.chat.completions.create({
+        model:       MODEL,
+        max_tokens:  256,
+        temperature: extraInstruction ? 0.3 : 0.1, // a little more latitude on the retry
+        messages: [
+          { role: 'system', content: EXTRACT_SYSTEM_PROMPT + extraInstruction },
+          { role: 'user',   content: `Transcript (language: ${replyLanguage}):\n${safeTranscript}` },
+        ],
+      }));
 
-    const rawExtraction = extractionRes.choices[0].message.content;
-    const cleanedExtraction = rawExtraction
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/, '')
-      .trim();
+      const cleaned = extractionRes.choices[0].message.content
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/, '')
+        .trim();
 
-    let claims = [];
-    try {
-      claims = JSON.parse(cleanedExtraction);
-      if (!Array.isArray(claims)) claims = [];
-    } catch {
-      console.warn('[/factcheck] Could not parse claims JSON:', cleanedExtraction.slice(0, 100));
-      return res.json([]);
+      try {
+        const parsed = JSON.parse(cleaned);
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+          .filter(c => typeof c === 'string' && c.trim().length > 15)
+          .slice(0, MAX_CLAIMS);
+      } catch {
+        console.warn('[/factcheck] Could not parse claims JSON:', cleaned.slice(0, 100));
+        return [];
+      }
+    };
+
+    let claims = await extractClaims();
+
+    // Nothing found on the strict pass. Before reporting "no checkable
+    // statements" — which reads as a failure to the viewer — ask again with a
+    // lower bar. Segments often contain something checkable that the strict
+    // prompt skipped as too soft; this costs one small Groq call and only runs
+    // when the first pass came back empty.
+    if (claims.length === 0) {
+      console.log('[/factcheck] No claims on the strict pass — retrying with a lower bar');
+      claims = await extractClaims(`
+
+RETRY — the strict pass found nothing. Lower the bar this time:
+- Accept claims that are checkable in principle even if hedged ("officials say
+  delays have doubled") — attribute them as stated rather than skipping them
+- Accept comparative and quantitative statements about trends, dates, counts,
+  costs, or timelines even without a precise figure
+- Accept statements about what an organisation or official announced or decided
+- Still refuse pure opinion, prediction, and rhetorical questions — those are
+  genuinely not checkable and a wrong verdict on them is worse than none`);
     }
-
-    // Filter out any claims that are too short to be meaningful
-    claims = claims
-      .filter(c => typeof c === 'string' && c.trim().length > 15)
-      .slice(0, MAX_CLAIMS);
 
     if (claims.length === 0) {
       console.log('[/factcheck] No verifiable claims found in transcript');
@@ -202,101 +335,39 @@ router.post('/', async (req, res, next) => {
     console.log(`[/factcheck] Extracted ${claims.length} claims:`, claims);
 
     // ── Step 2 + 3: Search + verdict for each claim ──
-    // Run sequentially to avoid rate limiting on Tavily free tier.
-    // Cache hits return instantly without any API calls.
-    const results = [];
-    for (const claim of claims) {
-      // Check cache first
+    // Claims are independent, so they run concurrently. This used to be a
+    // sequential loop "to avoid rate limiting on Tavily free tier", but
+    // parallelising MAX_CLAIMS calls changes burstiness, not rate — and the
+    // route throttle in server.js already caps this endpoint well below any
+    // plausible provider RPM limit. Cache hits still cost nothing.
+    //
+    // Budget accounting happens synchronously below, BEFORE any await, so
+    // spendBudget() is still called exactly once per real search and in claim
+    // order — concurrency can't interleave it.
+    const jobs = claims.map((claim) => {
       const cached = getCached(claim);
       if (cached) {
         console.log(`[/factcheck] Cache hit: "${claim.slice(0, 50)}"`);
-        results.push(cached);
-        continue;
+        return { kind: 'cached', claim, cached };
       }
-
       try {
         // Throws 429 if the monthly Tavily budget is spent (cache hits skip this)
         spendBudget('tavily');
-
-        const searchResult = await recordCall('tavily', tavilyClient.search(claim, {
-          maxResults:    5,
-          searchDepth:   'basic', // 1 Tavily credit instead of 2
-          includeAnswer: true,
-        }));
-
-        const tavilyAnswer = searchResult.answer
-          ? `Tavily summary: ${searchResult.answer}\n\n`
-          : '';
-
-        const searchContext = searchResult.results
-          .map((r, i) =>
-            `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.content?.slice(0, 600) ?? ''}`
-          )
-          .join('\n\n');
-
-        const sourceUrls = searchResult.results.map(r => r.url);
-
-        // If Tavily returned no results, mark as Unverified immediately
-        if (sourceUrls.length === 0) {
-          console.warn(`[/factcheck] No search results for: "${claim.slice(0, 50)}"`);
-          results.push({ claim, verdict: 'Unverified', confidence: 0.0, reasoning: 'No search results found.', sources: [] });
-          continue;
-        }
-
-        const verdictRes = await recordCall('groq', groq.chat.completions.create({
-          model:       MODEL,
-          max_tokens:  200,
-          temperature: 0.1,
-          messages: [
-            { role: 'system', content: VERDICT_SYSTEM_PROMPT },
-            {
-              role:    'user',
-              content: `Claim: "${claim}"\nRespond in ${replyLanguage}.\n\n${tavilyAnswer}Search results:\n${searchContext}`,
-            },
-          ],
-        }));
-
-        const rawVerdict = verdictRes.choices[0].message.content;
-        const cleanedVerdict = rawVerdict
-          .replace(/^```(?:json)?\s*/i, '')
-          .replace(/\s*```$/, '')
-          .trim();
-
-        const parsed = JSON.parse(cleanedVerdict);
-
-        const verdict    = ['True', 'False', 'Unverified'].includes(parsed.verdict)
-          ? parsed.verdict
-          : 'Unverified';
-        const confidence = Math.max(0, Math.min(1, Number(parsed.confidence) || 0));
-
-        console.log(`[/factcheck] "${claim.slice(0, 50)}" → ${verdict} (${(confidence * 100).toFixed(0)}%)`);
-
-        const result = {
-          claim,
-          verdict,
-          confidence,
-          reasoning: String(parsed.reasoning || '').slice(0, 300),
-          sources:   sourceUrls,
-        };
-
-        // Cache the result so repeat claims are instant
-        setCached(claim, result);
-        results.push(result);
-
+        return { kind: 'run', claim };
       } catch (err) {
-        console.warn(`[/factcheck] Failed on claim "${claim.slice(0, 50)}":`, err.message);
-        results.push({
-          claim,
-          verdict:    'Unverified',
-          confidence: 0.0,
-          reasoning:  err.budget ? err.message : 'Could not retrieve search results.',
-          sources:    [],
-        });
-        if (err.budget) break; // budget is spent — no point trying the next claim
+        return { kind: 'budget', claim, err };
       }
-    }
+    });
 
-    console.log(`[/factcheck] Done — ${results.length} verdicts`);
+    // Mirror the old `break`: once the budget is gone, keep everything up to
+    // and including the claim that discovered it, and drop the rest.
+    const exhaustedAt = jobs.findIndex(j => j.kind === 'budget');
+    const active = exhaustedAt === -1 ? jobs : jobs.slice(0, exhaustedAt + 1);
+
+    const startedAt = Date.now();
+    const results = await Promise.all(active.map(job => runClaim(job, { groq, tavilyClient, replyLanguage })));
+
+    console.log(`[/factcheck] Done — ${results.length} verdicts in ${Date.now() - startedAt}ms`);
     return res.json(results);
 
   } catch (err) {

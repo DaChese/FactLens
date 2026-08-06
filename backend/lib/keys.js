@@ -28,10 +28,22 @@ export function resolveKey(req, headerName, envVar) {
 
 const groqClients = new Map();
 
+// The SDK defaults (10-minute timeout, 2 retries) are far too generous for
+// calls this small — the extension gives up at 30s, so anything past that is
+// a request nobody is waiting for that still holds a throttle slot and an
+// already-spent budget unit. One retry still covers Groq's transient 5xx/429s.
+const GROQ_TIMEOUT_MS = 10_000;
+const GROQ_MAX_RETRIES = 1;
+
 /** @param {string} apiKey @returns {OpenAI} */
 export function getGroqClient(apiKey) {
   if (!groqClients.has(apiKey)) {
-    groqClients.set(apiKey, new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' }));
+    groqClients.set(apiKey, new OpenAI({
+      apiKey,
+      baseURL:    'https://api.groq.com/openai/v1',
+      timeout:    GROQ_TIMEOUT_MS,
+      maxRetries: GROQ_MAX_RETRIES,
+    }));
   }
   return groqClients.get(apiKey);
 }

@@ -8,6 +8,105 @@ gated, monochrome, and ~98% cheaper to run.
 
 ---
 
+## v1.6.0 — Reliability, dates, and real quotes (2026-08-05/06)
+
+**Why:** live use surfaced a cluster of problems that all had the same shape — the
+tool was silently doing less than it appeared to. Sessions could record forever
+after the service worker was suspended; the Stop button sometimes did nothing; the
+relevance filter for public reaction rejected *everything* on a real story; and the
+page title and description, which are the single best story signal available, were
+being truncated before the model ever saw them.
+
+**Sessions now reliably end.**
+- MV3 suspends the service worker after ~30s idle and `setTimeout` does not survive
+  that — and every path that stopped a session was a `setTimeout`. A suspension left
+  the session flagged active, the offscreen document capturing audio indefinitely,
+  and the panel stuck on "Listening". The offscreen document (whose timers cannot be
+  suspended) now heartbeats every 15s, waking the worker and capping recording at 6
+  minutes locally. The worker's watchdog enforces a 5-minute session cap and ends
+  sessions flagged active with nothing scheduled.
+- **`chrome.alarms` was evaluated and rejected.** Its minimum period is 30 seconds
+  and *unpacked extensions are exempt from that floor* — it would have worked
+  perfectly in development and silently clamped once packed. A reliability mechanism
+  whose failure mode is invisible in testing is worse than none.
+- **Check now** now ends the session instead of leaving it active with nothing
+  scheduled. Follow-up checks still work afterwards.
+- `startedAt` and `attempts` are persisted to `chrome.storage.session`, so the
+  3-attempt cap survives a worker restart instead of silently resetting.
+- Fixed: `startSession` revealed the Stop button before capture existed; a failing
+  start leaked the offscreen document; starting on a second tab orphaned the first
+  tab's recorder.
+
+**The Stop button works.**
+- `STOP_SESSION` with no active session was a no-op that broadcast nothing, so a
+  desynced panel could never recover. It now always reports idle.
+- Three `finally` blocks unconditionally re-broadcast `listening` after a note or
+  follow-up check, stamping "active" over a session that had already ended. They now
+  broadcast the real state.
+- The panel re-syncs every 10 seconds, so a lost status broadcast no longer strands
+  it, and Stop shows "Stopping…" instead of no feedback at all.
+- Pressing **Check statements** or **Check public reaction** no longer looks like a
+  new capture session started. Session state and working state are now tracked
+  separately; "processing" no longer reveals Stop and Check now.
+
+**Public reaction is substantially better.**
+- **Verbatim quotes.** The response now carries 3–6 short quotes showing what people
+  actually said, attributed to platform and date. Every quote is verified against the
+  source text it claims to come from and dropped if it does not match — a prompt rule
+  alone is a request, not a guarantee, and a fabricated quote attributed to a real
+  person is the most damaging thing this feature could emit.
+- **Comments on the page being watched** are now a first-class source, alongside a
+  search across Reddit, Hacker News, Quora, Bluesky, Threads, YouTube, X and
+  Facebook. Comments need no relevance matching — they are attached to the exact
+  video being watched.
+- **The relevance filter was far too strict.** A real run scored 0/12 on "MTA subway
+  upgrade delays New York City" because there was no stemming: "delayed" scored 0.00
+  against "delays". Fixed, and measured at 3/4 on-topic results kept on that same
+  story. Each filter gate now logs its own drop count, because the original "0/12
+  relevant" was undiagnosable.
+- **A broader second pass** runs when the strict pass finds too little, so a
+  mistuned threshold degrades into a wider search instead of into silence. Same
+  idea in `/factcheck`, which retries claim extraction with a lower bar.
+- The search is best-effort: if it fails, page comments alone still produce a result.
+
+**Dates everywhere.**
+- Notes show when the story broke; each outlet and each statement-check source shows
+  its publication date. Dates are formatted in UTC — rendering a midnight-UTC
+  publication date in local time showed the previous day for every viewer west of UTC.
+- The story's date now anchors the discussion search and its age filter. Age was
+  being measured from *today*, which discarded exactly the reaction we wanted for any
+  story more than a few days old.
+
+**Title and description are now the primary story signal.**
+- The content script collects ~1500 characters of title, headline and description,
+  but `/coverage` sliced it to 600 — throwing away over half, usually the description,
+  which is often the part that actually names the story. Now passed in full, with the
+  prompt treating it as primary and the transcript as corroboration.
+- YouTube's expanded video description is read from the DOM, since `og:description`
+  there is truncated to roughly the first line.
+
+**Feedback does something.**
+- **Helpful** now actually posts to `/coverage/feedback` — it previously only greyed
+  out the button, so the endpoint had never once received a thumbs-up — and ends the
+  session.
+- **Not helpful** keeps listening and retries, reusing the transcript already
+  collected rather than discarding it, and tells the backend to rule that story out.
+  The backend enforces the exclusion server-side rather than trusting the prompt.
+
+**Speed and robustness.**
+- Retries now wait for new transcript material rather than a flat 15-second clock,
+  and skip entirely when nothing has changed — saving a NewsAPI call that could only
+  have returned an identical answer.
+- `/factcheck` runs its claims concurrently instead of serially.
+- Groq, Tavily and Whisper calls are now bounded (10s/10s/20s, one retry). The Groq
+  SDK was defaulting to a 10-minute timeout while the extension gave up at 30s.
+- `FAST_MODEL` now falls back only on a 404 and latches, instead of firing a second
+  call on rate limits and timeouts where it could not possibly help.
+- `/status` no longer reports `.env.example` placeholder keys as "configured", and
+  startup warns about them explicitly.
+
+---
+
 ## v1.5.0 — Retry-until-confident, public reaction, trust fixes (2026-07-10/11)
 
 **Why:** live-testing v1.4.0 surfaced three real problems: a single miss on story
