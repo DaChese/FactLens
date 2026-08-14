@@ -110,6 +110,14 @@ h1, h2, h3, p { margin-top: 0; }
 .guardrails h3 { font-family: var(--serif); font-size: 28px; font-weight: 500; }
 .guardrails ul { padding-left: 18px; color: #c3c9cb; line-height: 1.65; }
 .guardrails a { color: var(--cyan); font-weight: 700; }
+.method-references { display: grid; grid-template-columns: minmax(240px, .65fr) minmax(0, 1.35fr); gap: 52px; margin-top: 64px; padding-top: 30px; border-top: 1px solid #566067; }
+.method-references h3 { margin: 0; font-family: var(--serif); font-size: 30px; font-weight: 500; }
+.reference-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: #566067; }
+.reference-list a { display: flex; flex-direction: column; gap: 12px; min-height: 175px; padding: 22px; background: #20262b; text-decoration: none; }
+.reference-list a:hover { background: #273037; }
+.reference-list strong { color: var(--cyan); font-family: var(--serif); font-size: 21px; font-weight: 500; }
+.reference-list span { color: #c4cbcd; font-size: 13px; line-height: 1.55; }
+.reference-disclaimer { grid-column: 2; margin: -28px 0 0; color: #8f999c; font-size: 12px; line-height: 1.55; }
 
 .stack-band { background: var(--white); }
 .stack-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -143,7 +151,8 @@ footer a { color: #d9dede; font-size: 13px; }
   .product-flow li { min-height: 0; padding: 24px 0 24px 56px; border-bottom: 1px solid rgba(0,0,0,.25); }
   .product-flow li::before { top: 26px; }
   .product-flow li::after { display: none; }
-  .method-layout { grid-template-columns: 1fr; }
+  .method-layout, .method-references { grid-template-columns: 1fr; }
+  .reference-disclaimer { grid-column: 1; margin-top: -24px; }
   .stack-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stack-grid article:nth-child(n) { padding-left: 20px; border-left: 1px solid var(--line); }
 }
@@ -157,6 +166,7 @@ footer a { color: #d9dede; font-size: 13px; }
   .feature-grid article, .feature-grid article + article { min-height: 0; padding: 22px 0; border-right: 0; border-bottom: 1px solid var(--line); }
   .feature-grid h3 { margin-top: 28px; }
   .stack-grid article:nth-child(n) { padding: 20px 0; border-left: 0; }
+  .reference-list { grid-template-columns: 1fr; }
   .roadmap-track article, .roadmap-track article:last-child { min-height: 230px; border-right: 1px solid #9aaeb5; border-bottom: 0; }
   .roadmap-track article:last-child { border-bottom: 1px solid #9aaeb5; }
   .roadmap-track h3 { margin-top: 44px; }

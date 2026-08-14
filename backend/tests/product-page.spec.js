@@ -12,6 +12,9 @@ test.describe('FactLens product page', () => {
     await expect(page.getByText('NewsAPI', { exact: true })).toBeVisible();
     await expect(page.getByText('Tavily', { exact: true })).toBeVisible();
     await expect(page.getByText('Connected TV overlay', { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: /Ad Fontes content analysis methodology/ })).toHaveAttribute('href', 'https://adfontesmedia.com/methodology-white-paper/');
+    await expect(page.getByRole('link', { name: /AllSides media bias rating methods/ })).toHaveAttribute('href', 'https://www.allsides.com/about/media-bias-rating-methods');
+    await expect(page.getByText(/not affiliated with, endorsed by, or methodologically equivalent/)).toBeVisible();
   });
 
   test('installer exposes a downloadable extension package and transparent steps', async ({ page, request }) => {

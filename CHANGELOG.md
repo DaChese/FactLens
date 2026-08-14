@@ -18,6 +18,8 @@ gated, monochrome, and ~98% cheaper to run.
 - Updated the packaged extension to use Railway by default while retaining localhost
   permission for development.
 - Added desktop and mobile product/installer regression coverage.
+- Added attributed Ad Fontes Media and AllSides methodology references beside the
+  findings rubric, with an explicit non-affiliation and prototype-equivalence disclaimer.
 
 ## v1.7.0 - Blind review and calibration foundation (2026-08-14)
 

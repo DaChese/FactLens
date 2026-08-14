@@ -140,6 +140,14 @@ model pass and is not yet calibrated against a politically diverse human review 
 The Studio and extension therefore label the entire section and political-direction
 field as **experimental** at the point of use.
 
+The public product page cites the Ad Fontes Media content-analysis white paper and
+AllSides rating methodology as external design references. FactLens borrows general
+principles such as separating bias from reliability, structured content review,
+politically diverse panels, blinded samples, and disagreement-aware confidence. It is
+not affiliated with either organization and does not claim methodological equivalence;
+their mature multi-reviewer processes describe the direction of the calibration roadmap,
+not the current automated prototype.
+
 ## 8. Outlet history is separate from segment analysis
 
 An earlier version of this project had an LLM score political lean and "emotional
