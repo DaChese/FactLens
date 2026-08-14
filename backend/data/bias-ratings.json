@@ -1,5 +1,12 @@
 {
   "_comment": "Outlet-level media bias ratings, based on publicly available AllSides / Ad Fontes-style consensus ratings. Ratings describe an outlet's overall editorial lean, not any individual article. Scale: left, lean-left, center, lean-right, right.",
+  "version": "1.1.0",
+  "reviewed_at": "2026-08-14",
+  "methodology": "Prototype consensus mapping for outlet-history context only; not an article score and not licensed AllSides or Ad Fontes data.",
+  "reference_sources": [
+    "https://www.allsides.com/media-bias/media-bias-ratings",
+    "https://adfontesmedia.com/interactive-media-bias-chart/"
+  ],
   "outlets": [
     { "name": "MSNBC",                     "domain": "msnbc.com",              "rating": "left" },
     { "name": "HuffPost",                  "domain": "huffpost.com",           "rating": "left" },

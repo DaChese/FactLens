@@ -22,6 +22,19 @@ end to end at least once before presenting; rehearse the exact clip you'll use l
 
 ## The run itself
 
+Current framing-analysis demo note: after the story-match line, show the separate
+apparent direction, framing intensity, and reliability values. Expand at least one
+exact evidence excerpt and point out the confidence inputs, analysis timestamp, and
+methodology version. Describe the publisher label only as outlet history.
+
+Missing context and framing share one synthesis request, so a complete note remains
+at up to 4 provider calls: 0-1 transcription, 2 LLM calls, and 1 NewsAPI call.
+
+For a research-methodology demo, enable the review opt-in before building a Studio
+note, open **Blind Review**, submit one de-branded rubric, and then reveal the locked
+calibration snapshot. Be explicit that one demo review proves workflow, not validity;
+meaningful calibration requires a diverse panel and measured agreement.
+
 The flow is now **Start → it figures it out on its own → stops itself** — the button
 sequence is simpler than it used to be, which is worth saying explicitly since it's a
 better demo beat than "click three things."
@@ -67,10 +80,12 @@ crisis — rehearse the switch-over itself, not just the happy path.
 - *"Isn't this just Community Notes?"* → no — explain the honest difference: X/Meta
   filters human-submitted ratings; this is an AI pipeline with its own self-verification
   step (`docs/ai-methodology.md`, the comparison table).
-- *"Who decides what's biased?"* → nobody, on purpose — the AI doesn't score bias; it's
-  a static, disclosed, human-curated outlet dataset (`docs/ethics-and-trust.md` §4).
-- *"What does this cost to run?"* → per note: ≤4 API calls (0-1 transcription + 2 LLM +
-  1 NewsAPI); idle listening costs nothing; self-imposed budgets prevent runaway spend
+- *"Who decides what's biased?"* → separate the two layers: the target segment gets a
+  versioned AI framing assessment with exact evidence excerpts, while the publisher's
+  static label is disclosed outlet history. Neither is objective truth
+  (`docs/ai-methodology.md` §7-8; `docs/ethics-and-trust.md` §4).
+- *"What does this cost to run?"* → per note: up to 4 API calls (0-1 transcription +
+  2 LLM + 1 NewsAPI); idle listening costs nothing; self-imposed budgets prevent runaway spend
   (`backend/lib/rateLimit.js`). A hard-to-identify story can retry up to 3 times before
   giving up, so the worst case is higher than a single check — still bounded, never
   unlimited.

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Install FactLens</title>
+  <link rel="stylesheet" href="product.css" />
+  <link rel="stylesheet" href="install.css" />
+</head>
+<body class="install-page">
+  <header class="install-nav">
+    <a class="product-brand" href="/"><img src="factlens-mark.png" alt="" width="34" height="34" /><span>FactLens</span></a>
+    <a href="/">Back to product</a>
+  </header>
+  <main class="installer-shell">
+    <section class="installer-heading">
+      <p class="kicker">Extension installer</p>
+      <h1>Install FactLens for Chrome</h1>
+      <p>The prototype is distributed as an unpacked extension while Chrome Web Store review is pending. The package is preconfigured for the Railway-hosted FactLens service.</p>
+    </section>
+
+    <section class="installer-layout">
+      <div class="installer-action">
+        <img src="factlens-mark.png" alt="FactLens extension icon" width="96" height="96" />
+        <div>
+          <p class="package-version">FactLens extension · version 1.8.0</p>
+          <h2>Download the current build</h2>
+          <p>Chrome requires developer mode for prototypes distributed outside its store. The browser will always ask you to confirm the unpacked extension.</p>
+        </div>
+        <a class="button button-primary" href="downloads/factlens-extension.zip" download>Download extension package</a>
+        <p class="package-meta">ZIP archive · Manifest V3 · Windows, macOS, Linux, and ChromeOS</p>
+      </div>
+
+      <ol class="install-steps">
+        <li><span>1</span><div><h3>Extract the download</h3><p>Unzip <strong>factlens-extension.zip</strong> into a folder you will keep.</p></div></li>
+        <li><span>2</span><div><h3>Open extensions</h3><p>Navigate to <strong>chrome://extensions</strong> and enable Developer mode.</p></div></li>
+        <li><span>3</span><div><h3>Load FactLens</h3><p>Select <strong>Load unpacked</strong>, then choose the extracted extension folder.</p></div></li>
+        <li><span>4</span><div><h3>Pin and start</h3><p>Pin FactLens, open a supported news video, and select the extension to begin.</p></div></li>
+      </ol>
+    </section>
+
+    <section class="installer-note">
+      <strong>Why is there no silent installer?</strong>
+      <p>Chrome blocks websites from silently installing unpacked extensions. This guided flow preserves Chrome’s required confirmation and makes every requested permission visible.</p>
+      <a href="studio.html">Try FactLens in Analysis Studio without installing</a>
+    </section>
+  </main>
+</body>
+</html>

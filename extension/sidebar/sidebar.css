@@ -314,6 +314,84 @@ a:hover {
   margin-bottom: 4px;
 }
 
+.fl-framing-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.fl-experimental-notice {
+  margin-bottom: 8px;
+  padding-left: 7px;
+  border-left: 2px solid var(--ink);
+  color: var(--ink-muted);
+  font-size: 10px;
+  font-style: italic;
+}
+
+.fl-framing-summary > div {
+  min-width: 0;
+  border: 1px solid var(--rule-light);
+  padding: 6px;
+}
+
+.fl-framing-summary dt {
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+.fl-framing-summary dd {
+  margin: 1px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.fl-framing-dimensions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+
+.fl-framing-dimensions dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.fl-framing-evidence {
+  margin: 8px 0;
+  font-size: 11px;
+}
+
+.fl-framing-evidence summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.fl-framing-finding {
+  padding: 6px 0;
+  border-top: 1px dotted var(--rule-light);
+}
+
+.fl-framing-finding blockquote {
+  margin: 3px 0;
+  padding-left: 7px;
+  border-left: 2px solid var(--ink);
+}
+
+.fl-framing-finding p,
+.fl-framing-provenance {
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+.fl-framing-provenance {
+  margin-bottom: 8px;
+}
+
 .fl-note-outlets {
   font-size: 12px;
   line-height: 1.8;

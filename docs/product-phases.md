@@ -6,7 +6,8 @@ FactLens is moving in phases so the hosted web surface can mature without breaki
 
 Status: current implementation.
 
-The Railway root page is a manual studio for pasted transcripts and page context. It uses the same backend routes as the extension:
+The Railway root is the public product and installer experience. The manual Studio at
+`/studio.html` accepts pasted transcripts and page context and uses the same backend routes as the extension:
 
 - `POST /coverage` builds the Community Note.
 - `POST /factcheck` checks statements after a note exists.
@@ -14,6 +15,11 @@ The Railway root page is a manual studio for pasted transcripts and page context
 - `GET /status` helps diagnose provider keys and budgets.
 
 The studio cannot capture another browser tab, read captions automatically, or inspect page content. Users must paste the transcript, headline, visible text, or source domain they want analyzed.
+
+Phase 1 now includes a local calibration workspace: Studio users can explicitly opt a
+transcript into a memory-only blind queue, reviewers submit a locked rubric before
+seeing automation, and hash/score-only JSONL supports agreement analysis. This is a
+research workflow, not a public community-rating system.
 
 ## Phase 2: Extension Dashboard
 
@@ -35,7 +41,7 @@ Persistent report storage needs retention limits, deletion controls, and careful
 
 Status: planned.
 
-A public explorer or community review layer should come only after story matching, moderation, abuse controls, and privacy boundaries are reliable. Community participation must not pretend to be X/Meta Community Notes unless it has the rating diversity, history, and moderation systems that make that model meaningful.
+A public explorer or public community review layer should come only after story matching, moderation, abuse controls, authentication, and privacy boundaries are reliable. The local blind calibration workflow does not change this requirement. Community participation must not pretend to be X/Meta Community Notes unless it has the rating diversity, history, and moderation systems that make that model meaningful.
 
 ## Privacy Boundaries
 

@@ -77,12 +77,13 @@ acts or iterates — not a single prompt-in/answer-out call.
 
 **File:** `backend/routes/coverage.js`, `extractMissingContext()`
 
-A second LLM call compares the transcript against the headlines/descriptions of other
+A second, combined LLM call compares the transcript against headlines/descriptions of other
 outlets currently covering the same story (from NewsAPI) and extracts up to 3 concrete
 facts present in that other coverage but absent from this segment — a name, a
 statistic, a prior event, an official response. Each fact is tied to the specific
-article it came from and shown with a clickable source. Only runs when confidence is
-not low.
+article it came from and shown with a clickable source. The same response also contains
+the framing object described in §7, avoiding an additional model round trip. It only
+runs when confidence is not low.
 
 ## 5. What people are discussing (public reaction)
 
@@ -111,7 +112,35 @@ only; it has **no effect on future checks**. This is deliberately not dressed up
 learning system — see `docs/ethics-and-trust.md` for the full reasoning, and the
 X/Meta comparison below for why this is a different mechanism than it might look like.
 
-## 7. "Bias" is explicitly not AI-judged
+## 7. Article-level framing analysis
+
+**File:** `backend/routes/coverage.js`, `normalizeFraming()`
+
+The current system uses a versioned, article-level rubric and keeps political
+direction separate from factual reliability. The model evaluates only the target
+transcript, using same-story coverage as comparison context. It scores loaded
+language, one-sided sourcing, evidence quality, missing context, and fact/opinion
+separation, alongside apparent direction, framing intensity, and reliability.
+
+Every finding must include an exact transcript excerpt. The backend rejects evidence
+whose excerpt does not occur verbatim in the input. It also rejects the complete framing
+object when a required score or enum is absent or invalid instead of converting malformed
+values into zeroes. The displayed analysis-completeness metric describes comparison-input
+and validated-excerpt availability; it is not a probability of correctness. Results
+include an analysis timestamp and methodology version. Analysis is withheld when the
+story match is low-confidence. With no comparison coverage, transcript-supported
+dimensions may still be returned at low completeness while missing context stays empty.
+
+The combined synthesis uses the provider's JSON-object response mode. Live testing
+showed that unconstrained output intermittently failed parsing even with an explicit
+schema in the prompt.
+
+This is an automated assessment, not objective ground truth. Version 1.0 uses one
+model pass and is not yet calibrated against a politically diverse human review set.
+The Studio and extension therefore label the entire section and political-direction
+field as **experimental** at the point of use.
+
+## 8. Outlet history is separate from segment analysis
 
 An earlier version of this project had an LLM score political lean and "emotional
 charge" directly from the language of the transcript. **That was removed.** A single
@@ -126,6 +155,31 @@ multiple outlets, the note shows each outlet's known published lean and the resu
 spread ("4 left-leaning, 1 center, 2 right-leaning"). The AI never decides who's
 biased; it only reports which outlets — with a pre-existing, disclosed rating — are
 covering the story.
+
+That static-only design was the interim replacement. It is retained for historical
+publisher context, but the current implementation also performs the evidence-backed
+segment analysis described above. Static labels never feed or override that analysis.
+
+## 9. Blind human review and calibration
+
+**Files:** `backend/routes/reviews.js`, `backend/lib/reviewStore.js`,
+`backend/public/review.html`
+
+Studio users can explicitly opt a transcript into a blind-review queue. Reviewers see
+the transcript without outlet branding or automated scores, self-identify their broad
+political perspective (or decline), and independently score the same direction,
+framing, reliability, and dimension rubric. Their submission is locked before the
+aggregate or automated result is revealed.
+
+The review API fails closed unless an operator configures `REVIEWER_ACCESS_TOKEN`.
+Authorized panel members enter the shared token in the review workspace. Duplicate
+checks and JSONL writes are serialized within the server process.
+
+The system reports reviewer count, perspective coverage, direction agreement, and mean
+framing/reliability scores. This creates the mechanism needed for calibration, but no
+calibration claim should be made until a sufficiently diverse real reviewer set has
+been collected. Fixed fixtures test deterministic safeguards and source-order
+invariance; they do not substitute for human validity data.
 
 ## How this compares to X/Meta Community Notes (and where it honestly differs)
 

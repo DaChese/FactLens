@@ -33,7 +33,9 @@
  *    articles:        [{ title, outlet, url, bias }],
  *    coverage:        { total, "left", "lean-left", "center", "lean-right", "right", "unrated" },
  *    missing_context: string[],         // facts other outlets report that this segment omits
- *    outlet_bias:     { name, rating } | null   // rating of the outlet being watched
+ *    outlet_bias:     { name, rating } | null,  // historical outlet-level reference
+ *    framing_analysis: { direction, framing_intensity, reliability, dimensions,
+ *                        evidence, confidence, analyzed_at, methodology_version } | null
  *  }
  *
  * POST /coverage/feedback
@@ -51,6 +53,7 @@ import { resolveKey, getGroqClient } from '../lib/keys.js';
 import { keywordOverlap } from '../lib/textMatch.js';
 import { recordCall, recordSuccess, recordFailure } from '../lib/apiStatus.js';
 import { spendBudget } from '../lib/rateLimit.js';
+import { enqueueAnalysis } from '../lib/reviewStore.js';
 
 const router = Router();
 
@@ -62,6 +65,7 @@ const MODEL      = 'llama-3.3-70b-versatile';
 // swap it for whatever Groq's current small/fast tier is called.)
 const FAST_MODEL = 'llama-3.1-8b-instant';
 const MAX_CHARS  = 4000;
+const FRAMING_METHODOLOGY_VERSION = '1.0';
 
 // ─── Bias Ratings Lookup ─────────────────────────────────────────────────────
 // Loaded once at startup. Index by both normalised outlet name and domain so we
@@ -192,13 +196,95 @@ A good missing-context item:
 - Actually appears in the other coverage provided
 - Is genuinely absent from the transcript excerpt
 
-If the other coverage adds nothing concrete beyond the transcript, return [].
+If the other coverage adds nothing concrete beyond the transcript, use an empty
+"missing_context" array.
 Each fact must be one short standalone sentence. "source" is the number of the
 coverage item ([1], [2], ...) the fact came from.
-Return ONLY a valid JSON array — no markdown, no explanation.
+The missing-context item format is:
+{ "fact": "<one sentence>", "source": <coverage item number> }
+`.trim();
 
-Output format:
-[ { "fact": "<one sentence>", "source": <coverage item number> } ]
+const FRAMING_SYSTEM_PROMPT = `
+Evaluate only the target transcript using the comparison coverage as context. Do not
+infer anything from the publisher name or reputation. Political direction and factual
+reliability are separate. Return "unclear" unless the transcript itself supports a
+political direction.
+
+Score from 0 to 100:
+- loaded_language: 0 neutral, 100 consistently emotional or inflammatory
+- source_balance: 0 relevant perspectives represented, 100 strongly one-sided
+- evidence_quality: 0 unsupported, 100 consistently supported and attributed
+- missing_context: 0 no material omission visible, 100 crucial context omitted
+- fact_opinion_separation: 0 blurred, 100 clearly distinguished
+
+Every evidence item must contain an exact short quote from the target transcript.
+Never invent a quote. The framing object shape is:
+{
+  "direction": "left|lean-left|center|lean-right|right|mixed|unclear",
+  "framing_intensity": 0,
+  "reliability": 0,
+  "dimensions": {
+    "loaded_language": 0,
+    "source_balance": 0,
+    "evidence_quality": 0,
+    "missing_context": 0,
+    "fact_opinion_separation": 0
+  },
+  "evidence": [
+    { "dimension": "loaded_language", "excerpt": "exact quote", "explanation": "brief reason" }
+  ]
+}
+`.trim();
+
+const ANALYSIS_SYSTEM_PROMPT = `
+You are a media transparency analyst. Compare one target transcript with headlines and
+descriptions from other outlets covering the same story. Return one JSON object only.
+
+Task 1 - missing context:
+Identify up to 3 concrete facts found in comparison coverage but absent from the target.
+Each item must use { "fact": "one sentence", "source": 1 }, where source is the
+numbered comparison item. Use an empty array when no concrete omission is supported.
+
+Task 2 - target framing:
+Evaluate only the target transcript. Never infer from publisher identity. Keep political
+direction separate from factual reliability. Direction must be left, lean-left, center,
+lean-right, right, mixed, or unclear. Use unclear without textual evidence.
+
+Score 0-100:
+- framing_intensity: strength of observable framing
+- reliability: factual support and attribution quality
+- loaded_language: 0 neutral, 100 consistently emotional or inflammatory
+- source_balance: 0 relevant perspectives represented, 100 strongly one-sided
+- evidence_quality: 0 unsupported, 100 consistently supported and attributed
+- missing_context: 0 no material omission visible, 100 crucial context omitted
+- fact_opinion_separation: 0 blurred, 100 clearly distinguished
+
+Every evidence excerpt must be an exact, short quote from the target transcript. Never
+invent or paraphrase a quote. Return no evidence item when an exact quote is unavailable.
+Respond in the requested language, but keep JSON property names and enum values exactly
+as specified.
+
+Output shape:
+{
+  "missing_context": [
+    { "fact": "<one sentence>", "source": 1 }
+  ],
+  "framing": {
+    "direction": "unclear",
+    "framing_intensity": 0,
+    "reliability": 0,
+    "dimensions": {
+      "loaded_language": 0,
+      "source_balance": 0,
+      "evidence_quality": 0,
+      "missing_context": 0,
+      "fact_opinion_separation": 0
+    },
+    "evidence": [
+      { "dimension": "loaded_language", "excerpt": "<exact quote>", "explanation": "<brief reason>" }
+    ]
+  }
+}
 `.trim();
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -322,18 +408,20 @@ async function searchNewsApi(newsApiKey, query, language) {
  * @returns {{ text: string, outlet: string|null, url: string|null }[]}
  */
 async function extractMissingContext(groq, transcript, articles, replyLanguage) {
-  if (articles.length === 0) return [];
-
   const otherCoverage = articles
     .map((a, i) => `[${i + 1}] ${a.outlet}: ${a.title}${a.description ? ` — ${a.description}` : ''}`)
-    .join('\n');
+    .join('\n') || '(No comparison coverage was available. Return an empty missing_context array and assess only transcript-supported dimensions.)';
 
   const response = await recordCall('groq', groq.chat.completions.create({
     model:       MODEL,
-    max_tokens:  300,
+    max_tokens:  900,
     temperature: 0.1,
+    response_format: { type: 'json_object' },
     messages: [
-      { role: 'system', content: CONTEXT_SYSTEM_PROMPT },
+      {
+        role: 'system',
+        content: ANALYSIS_SYSTEM_PROMPT,
+      },
       {
         role:    'user',
         content: `Transcript excerpt:\n${transcript}\n\nOther outlets' coverage:\n${otherCoverage}\n\nRespond in ${replyLanguage}.`,
@@ -343,9 +431,10 @@ async function extractMissingContext(groq, transcript, articles, replyLanguage) 
 
   try {
     const parsed = JSON.parse(stripFences(response.choices[0].message.content));
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed
+    const missingItems = Array.isArray(parsed?.missing_context)
+      ? parsed.missing_context
+      : (Array.isArray(parsed) ? parsed : []);
+    const missingContext = missingItems
       .map((item) => {
         // Tolerate the model returning plain strings instead of objects
         const text = typeof item === 'string' ? item : item?.fact;
@@ -359,9 +448,61 @@ async function extractMissingContext(groq, transcript, articles, replyLanguage) 
       })
       .filter(Boolean)
       .slice(0, 3);
+    return {
+      missingContext,
+      framingAnalysis: normalizeFraming(parsed?.framing, transcript, articles),
+    };
   } catch {
-    console.warn('[/coverage] Could not parse missing-context JSON');
-    return [];
+    console.warn('[/coverage] Could not parse combined context/framing JSON:', response.choices[0].message.content.slice(0, 300));
+    return { missingContext: [], framingAnalysis: null };
+  }
+}
+
+export function normalizeFraming(parsed, transcript, articles) {
+  if (!parsed || typeof parsed !== 'object') return null;
+  try {
+    const validScore = value => Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 100;
+    const clamp = value => Math.round(Number(value));
+    const directions = ['left', 'lean-left', 'center', 'lean-right', 'right', 'mixed', 'unclear'];
+    const dimensionNames = ['loaded_language', 'source_balance', 'evidence_quality', 'missing_context', 'fact_opinion_separation'];
+    if (!directions.includes(parsed.direction)
+      || !validScore(parsed.framing_intensity)
+      || !validScore(parsed.reliability)
+      || !parsed.dimensions
+      || !dimensionNames.every(name => validScore(parsed.dimensions[name]))) {
+      return null;
+    }
+    const dimensions = Object.fromEntries(dimensionNames.map(name => [name, clamp(parsed.dimensions?.[name])]));
+    const evidence = (Array.isArray(parsed.evidence) ? parsed.evidence : [])
+      .filter(item => dimensionNames.includes(item?.dimension) && typeof item?.excerpt === 'string' && transcript.includes(item.excerpt))
+      .map(item => ({
+        dimension: item.dimension,
+        excerpt: item.excerpt.slice(0, 240),
+        explanation: String(item.explanation || '').slice(0, 300),
+      }))
+      .slice(0, 5);
+
+    // This measures input/output completeness, not probability that the judgment is correct.
+    const independentSources = new Set(articles.map(article => article.url || article.outlet).filter(Boolean)).size;
+    const completenessScore = Math.min(90, Math.round(25 + Math.min(independentSources, 6) * 7 + evidence.length * 4));
+    return {
+      direction: parsed.direction,
+      framing_intensity: clamp(parsed.framing_intensity),
+      reliability: clamp(parsed.reliability),
+      dimensions,
+      evidence,
+      confidence: {
+        score: completenessScore,
+        label: completenessScore >= 75 ? 'high' : completenessScore >= 50 ? 'medium' : 'low',
+        basis: 'analysis_completeness',
+        comparison_sources: independentSources,
+      },
+      analyzed_at: new Date().toISOString(),
+      methodology_version: FRAMING_METHODOLOGY_VERSION,
+    };
+  } catch {
+    console.warn('[/coverage] Could not parse framing analysis JSON');
+    return null;
   }
 }
 
@@ -381,7 +522,7 @@ const MATCH_THRESHOLD = 0.3;
 
 router.post('/', async (req, res, next) => {
   try {
-    const { transcript, language = 'english', outlet = null, pageTitle = null, onScreenText = null, previousGuess = null } = req.body;
+    const { transcript, language = 'english', outlet = null, pageTitle = null, onScreenText = null, previousGuess = null, review_opt_in = false } = req.body;
 
     const hasTranscript = typeof transcript === 'string' && transcript.trim().length > 0;
     const hasScreenSignals =
@@ -467,12 +608,24 @@ router.post('/', async (req, res, next) => {
     // when nothing has been transcribed from it so far (the fast page-signals
     // path can reach this point with an empty transcript).
     let missingContext = [];
+    let framingAnalysis = null;
     if (!lowConfidence && hasTranscript) {
-      missingContext = cached?.missing_context
-        ?? await extractMissingContext(groq, safeTranscript, articles, replyLanguage);
+      const analysis = await extractMissingContext(groq, safeTranscript, articles, replyLanguage);
+      missingContext = analysis.missingContext;
+      framingAnalysis = analysis.framingAnalysis;
     }
 
-    // Cache articles + context so repeat requests don't burn NewsAPI/Groq quota.
+    let reviewSample = null;
+    if (review_opt_in === true && framingAnalysis) {
+      try {
+        reviewSample = await enqueueAnalysis({ transcript: safeTranscript, story: storyInfo.story, analysis: framingAnalysis });
+      } catch (error) {
+        console.warn('[/coverage] Could not enqueue blind-review sample:', error.message);
+      }
+    }
+
+    // Cache shared article searches so repeat requests do not burn NewsAPI quota.
+    // Transcript-specific context/framing is intentionally recomputed per segment.
     // Confidence is NOT cached — it depends on the page the viewer is watching.
     coverageCache.set(cacheKey, {
       result:   { articles, missing_context: lowConfidence ? (cached?.missing_context ?? null) : missingContext },
@@ -491,6 +644,8 @@ router.post('/', async (req, res, next) => {
       coverage:        lowConfidence ? null : tallyCoverage(articles),
       missing_context: missingContext,
       outlet_bias:     outletBias,
+      framing_analysis: framingAnalysis,
+      review_sample: reviewSample,
     });
 
   } catch (err) {

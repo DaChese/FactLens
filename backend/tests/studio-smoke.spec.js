@@ -15,7 +15,7 @@ test.describe('FactLens studio smoke tests', () => {
   });
 
   test('studio loads with samples, collapsed developer settings, and disabled follow-ups', async ({ page }) => {
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.goto('/studio.html', { waitUntil: 'domcontentloaded' });
 
     await expect(page).toHaveTitle(/FactLens Analysis Studio/);
     await expect(page.getByRole('heading', { name: 'Understand the story behind the segment' })).toBeVisible();
@@ -29,7 +29,7 @@ test.describe('FactLens studio smoke tests', () => {
   });
 
   test('sample loading, clear form, and empty validation work', async ({ page }) => {
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.goto('/studio.html', { waitUntil: 'domcontentloaded' });
 
     await page.getByRole('button', { name: /Transcript with headline/ }).click();
     await expect(page.locator('#transcript')).toHaveValue(/The Supreme Court heard arguments/);
@@ -45,7 +45,7 @@ test.describe('FactLens studio smoke tests', () => {
   });
 
   test('developer settings can load provider status without showing key values', async ({ page }) => {
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.goto('/studio.html', { waitUntil: 'domcontentloaded' });
 
     await page.getByText('Developer settings').click();
     await page.getByRole('button', { name: 'Refresh provider status' }).click();

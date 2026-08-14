@@ -10,10 +10,14 @@
 3. After ~20-30 seconds, the viewer presses **Check now**.
 4. Within a few seconds, a Community Note appears: the story identified, the evidence
    it was matched on, context other outlets reported (with sources), and who else is
-   covering it (with each outlet's lean).
+   covering it, plus evidence-backed framing and reliability analysis of the target
+   segment. Outlet lean is separately labeled historical context.
 5. Optionally, the viewer presses **Check statements** (fact-checks specific claims) or
    **Check public reaction** (searches and summarizes public discussion) — each a
    separate, deliberate action, each adding its own labeled section to the same note.
+6. In the Analysis Studio, a user may explicitly opt a transcript into local blind
+   review. A reviewer scores de-branded text before seeing automated or aggregate
+   results; raw transcript text remains memory-only.
 6. If the segment changes to a different story, the old note is archived below and a
    fresh one starts on the next Check now.
 

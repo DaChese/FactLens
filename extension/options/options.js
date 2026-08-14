@@ -11,7 +11,7 @@
 (function () {
   'use strict';
 
-  const DEFAULT_BACKEND_URL = 'http://localhost:3001';
+  const DEFAULT_BACKEND_URL = 'https://factlens-production.up.railway.app';
 
   const form        = document.getElementById('fl-settings-form');
   const backendUrl  = document.getElementById('fl-backend-url');

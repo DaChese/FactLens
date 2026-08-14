@@ -28,7 +28,7 @@
  * Session state lives in chrome.storage.session (survives SW restarts).
  */
 
-const DEFAULT_BACKEND_URL = 'http://localhost:3001';
+const DEFAULT_BACKEND_URL = 'https://factlens-production.up.railway.app';
 
 // ── Settings (backend URL + API keys) ──
 // Configured via the extension's Settings page (options/options.js) and
@@ -579,7 +579,8 @@ function deduplicateOverlap(prev, next) {
 /**
  * Build a Community Note for the tab: get a transcript (captions preferred,
  * one Whisper call otherwise), then one /coverage call. Total cost per press:
- * 0-1 transcription + 2 LLM calls + 1 NewsAPI request.
+ * 0-1 transcription + 2 LLM calls + 1 NewsAPI request. Missing context and
+ * framing are produced by the same synthesis call.
  *
  * Returns an outcome string so the caller (autoRunAndStop) can decide whether
  * to retry: 'success' | 'no_story' | 'low_confidence' | 'unavailable' |

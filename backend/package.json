@@ -8,7 +8,9 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test:studio": "node scripts/run-studio-tests.js",
-    "test:studio:live": "node scripts/run-studio-tests.js --live"
+    "test:studio:live": "node scripts/run-studio-tests.js --live",
+    "test:framing": "node scripts/run-framing-eval.js",
+    "test:reviews": "node scripts/test-review-store.js"
   },
   "dependencies": {
     "@tavily/core": "0.5.2",

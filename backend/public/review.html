@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FactLens Blind Review</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="review.css" />
+</head>
+<body>
+  <header class="site-header review-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">FL</span>
+      <div>
+        <p class="eyebrow">FactLens Research</p>
+        <h1>Blind Review</h1>
+      </div>
+    </div>
+    <a href="studio.html">Analysis Studio</a>
+  </header>
+
+  <main class="review-main">
+    <section class="review-status" aria-labelledby="review-status-title">
+      <div>
+        <p class="eyebrow">Calibration</p>
+        <h2 id="review-status-title">Independent content assessment</h2>
+      </div>
+      <p id="review-activity" role="status" aria-live="polite">Loading review queue...</p>
+    </section>
+
+    <form id="review-access" class="review-status">
+      <div class="field">
+        <label for="review-access-token">Panel access token</label>
+        <input id="review-access-token" type="password" autocomplete="off" required />
+      </div>
+      <button type="submit">Open review queue</button>
+    </form>
+
+    <section id="review-empty" class="review-empty" hidden>
+      <h2>No samples available</h2>
+      <p>Opt a transcript into blind review from the Analysis Studio, then return here.</p>
+    </section>
+
+    <div id="review-workspace" class="review-workspace" hidden>
+      <section class="review-transcript" aria-labelledby="review-transcript-title">
+        <p class="eyebrow">De-branded sample</p>
+        <h2 id="review-transcript-title">Transcript</h2>
+        <blockquote id="review-transcript"></blockquote>
+      </section>
+
+      <form id="review-form" class="review-form">
+        <div class="field-row">
+          <div class="field">
+            <label for="reviewer-stance">Your political perspective</label>
+            <select id="reviewer-stance" required>
+              <option value="">Select one</option>
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+              <option value="prefer-not-to-say">Prefer not to say</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="direction">Apparent direction</label>
+            <select id="direction" required>
+              <option value="">Select one</option>
+              <option value="left">Left</option>
+              <option value="lean-left">Lean left</option>
+              <option value="center">Center</option>
+              <option value="lean-right">Lean right</option>
+              <option value="right">Right</option>
+              <option value="mixed">Mixed</option>
+              <option value="unclear">Unclear</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="review-sliders" class="review-sliders"></div>
+        <button type="submit">Submit locked review</button>
+      </form>
+    </div>
+
+    <section id="review-summary" class="review-summary" hidden aria-labelledby="review-summary-title">
+      <p class="eyebrow">Submitted</p>
+      <h2 id="review-summary-title">Calibration snapshot</h2>
+      <div id="summary-content"></div>
+      <button id="next-review" type="button">Review next sample</button>
+    </section>
+  </main>
+  <script src="review.js"></script>
+</body>
+</html>

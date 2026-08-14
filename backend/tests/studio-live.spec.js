@@ -6,12 +6,16 @@ test.describe('FactLens studio live analysis', () => {
   test('builds a note and runs follow-up analysis from the deployed studio', async ({ page }) => {
     test.setTimeout(180_000);
 
-    await page.goto('/');
+    await page.goto('/studio.html');
     await page.getByRole('button', { name: /Transcript with headline/ }).click();
 
     await page.getByRole('button', { name: 'Build Community Note' }).click();
     await expect(page.getByText('Community Note ready.')).toBeVisible({ timeout: 120_000 });
     await expect(page.getByRole('heading', { name: 'Identified story' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Experimental framing analysis' })).toBeVisible();
+    await expect(page.getByText('Framing intensity')).toBeVisible();
+    await expect(page.getByText('Reliability', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Method 1\.0 \| \d+ comparison source/)).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Missing context' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Other coverage' })).toBeVisible();
 

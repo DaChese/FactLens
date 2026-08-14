@@ -1,0 +1,80 @@
+[
+  {
+    "name": "neutral attributed report",
+    "transcript": "The agency said the rule begins Monday. The opposition spokesperson said the rule may raise costs.",
+    "articles": [
+      { "outlet": "Source A", "title": "Agency rule starts Monday" },
+      { "outlet": "Source B", "title": "Opposition raises cost concerns" }
+    ],
+    "model_output": {
+      "direction": "center",
+      "framing_intensity": 18,
+      "reliability": 88,
+      "dimensions": {
+        "loaded_language": 5,
+        "source_balance": 10,
+        "evidence_quality": 85,
+        "missing_context": 15,
+        "fact_opinion_separation": 92
+      },
+      "evidence": [
+        {
+          "dimension": "evidence_quality",
+          "excerpt": "The agency said the rule begins Monday.",
+          "explanation": "The statement is attributed."
+        }
+      ]
+    },
+    "expected": { "direction": "center", "evidence_count": 1 }
+  },
+  {
+    "name": "abstain on malformed scores",
+    "transcript": "Officials called the proposal a major change.",
+    "articles": [
+      { "outlet": "Source C", "title": "Officials describe proposal" }
+    ],
+    "model_output": {
+      "direction": "unsupported-label",
+      "framing_intensity": 140,
+      "reliability": -20,
+      "dimensions": {
+        "loaded_language": 101,
+        "source_balance": -5,
+        "evidence_quality": 50,
+        "missing_context": 50,
+        "fact_opinion_separation": 50
+      },
+      "evidence": [
+        {
+          "dimension": "loaded_language",
+          "excerpt": "This quote was never in the transcript.",
+          "explanation": "Invalid evidence."
+        }
+      ]
+    },
+    "expected": { "abstain": true }
+  },
+  {
+    "name": "transcript-only analysis remains available",
+    "transcript": "Officials called the proposal reckless, while offering no supporting figures.",
+    "articles": [],
+    "model_output": {
+      "direction": "unclear",
+      "framing_intensity": 60,
+      "reliability": 35,
+      "dimensions": {
+        "loaded_language": 65,
+        "source_balance": 50,
+        "evidence_quality": 25,
+        "missing_context": 50,
+        "fact_opinion_separation": 55
+      },
+      "evidence": [{
+        "dimension": "loaded_language",
+        "excerpt": "called the proposal reckless",
+        "explanation": "The wording is evaluative."
+      }]
+    },
+    "expected": { "direction": "unclear", "evidence_count": 1 }
+  }
+]

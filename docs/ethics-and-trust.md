@@ -37,13 +37,32 @@ discussion to summarize" rather than a fabricated one. Most of the failure modes
 worry about with AI news tools are exactly this — confident wrongness — and the
 architecture is built to refuse rather than guess.
 
-## 4. Bias data is disclosed, static, and never AI-generated
+## 4. Framing analysis and outlet history are separate
+
+The current framing assessment is AI-generated, but constrained by an explicit,
+versioned rubric. Political direction, framing intensity, and reliability are separate
+outputs. Findings must quote the target transcript exactly; the backend discards an
+evidence excerpt when it cannot be found verbatim in the submitted text.
+
+Displayed analysis completeness is not model self-assessment or accuracy confidence.
+It reports the amount of distinct comparison coverage and validated evidence available.
+Results expose their timestamp and methodology version. These controls improve auditability, but do not make the
+assessment objective: version 1.0 uses one model pass and is not yet calibrated by a
+politically diverse human reviewer panel.
+
+Both user interfaces label framing and political direction as experimental. This is a
+required product disclaimer for the prototype, not merely documentation fine print.
+
+The following static data is retained only as outlet-history context:
 
 `backend/data/bias-ratings.json` is a small, hand-curated approximation of
 AllSides-style outlet ratings — not licensed AllSides data, not an algorithm, and not
 an LLM's opinion re-scored on the fly (an earlier LLM-based bias meter was deliberately
 removed; see `docs/ai-methodology.md` §7). Anyone can open the file and see exactly
 what it contains and where the categories came from.
+
+The UI explicitly says this label is not the current segment's score. It never feeds
+or overrides the dynamic framing assessment.
 
 ## 5. Broadcaster-controlled, not imposed
 
@@ -62,6 +81,17 @@ which preserves editorial independence rather than overriding it.
   backend, never to a third party (`backend/lib/keys.js` per-request header pattern).
 - In-memory caches (coverage, claims, ratings status) reset on backend restart — no
   persistent viewer profile is built anywhere.
+- Blind-review participation is explicit and off by default. Opted-in raw transcripts
+  stay only in memory and disappear on restart. Persistent JSONL stores transcript
+  hashes, scores, timestamps, methodology provenance, and hashed reviewer sessions.
+  Audit records exclude raw transcript text, story titles, and quoted evidence excerpts.
+- The server, not only the UI, blocks aggregate/automated review summaries until that
+  reviewer session has submitted a locked review. Memory-only samples expire after
+  24 hours by default.
+- Review sample, submission, and summary endpoints fail closed unless an operator sets
+  a panel access token. The token limits the queue to an invited review panel.
+- Reviewer political perspective is optional calibration metadata. It is associated
+  with a one-way hashed session and used to measure panel diversity, not identity.
 
 ## 7. Responsible use of third-party APIs
 
@@ -97,6 +127,11 @@ Being direct about limits, since overclaiming is its own ethical failure:
 - The outlet bias dataset is small (~48 outlets), US-centric, and a static
   approximation — it will misjudge or fail to rate real outlets. Disclosed openly
   rather than presented as authoritative.
+- Framing analysis is sensitive to transcript quality, the comparison articles
+  returned by NewsAPI, and the model prompt. It has no human inter-rater agreement,
+  blind survey, or longitudinal calibration yet.
+- Its completeness score measures available inputs and validated evidence, not a
+  statistical probability that the political-direction label is correct.
 - Keyword-overlap consensus checking catches gross mismatches, not subtle ones — it's
   a safety net, not a guarantee of correctness.
 - Public-discussion search reflects whatever a general web search surfaces about a

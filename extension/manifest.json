@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FactLens",
-  "version": "1.5.0",
-  "description": "Community notes for live video — real-time story context, coverage comparison, and public reaction for any browser tab.",
+  "version": "1.8.0",
+  "description": "Community notes for live video with story context, framing analysis, coverage comparison, and public reaction.",
 
   "permissions": [
     "tabCapture",
@@ -15,7 +15,8 @@
   ],
 
   "host_permissions": [
-    "http://localhost:3001/*"
+    "http://localhost:3001/*",
+    "https://factlens-production.up.railway.app/*"
   ],
 
   "background": {

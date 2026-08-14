@@ -3,168 +3,159 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FactLens Analysis Studio</title>
-  <link rel="stylesheet" href="styles.css" />
+  <meta name="description" content="FactLens adds transparent, source-linked context to live news video." />
+  <title>FactLens | Context for live news</title>
+  <link rel="stylesheet" href="product.css" />
 </head>
 <body>
-  <header class="site-header">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true">FL</span>
-      <div>
-        <p class="eyebrow">FactLens Analysis Studio</p>
-        <h1>Understand the story behind the segment</h1>
-      </div>
-    </div>
-    <div class="status-pill" id="status-pill" role="status">Checking backend</div>
+  <header class="product-nav">
+    <a class="product-brand" href="/" aria-label="FactLens home">
+      <img src="factlens-mark.png" alt="" width="34" height="34" />
+      <span>FactLens</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="#method">Method</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="studio.html">Analysis Studio</a>
+      <a class="nav-download" href="install.html">Get extension</a>
+    </nav>
   </header>
 
   <main>
-    <section class="intro" aria-labelledby="intro-title">
-      <div>
-        <h2 id="intro-title">Manual studio for pasted transcripts</h2>
-        <p>Paste a transcript or page details to build a neutral Community Note using the same analysis pipeline as the FactLens extension.</p>
+    <section class="product-hero" aria-labelledby="hero-title">
+      <div class="hero-backdrop" aria-hidden="true"></div>
+      <div class="hero-copy">
+        <p class="kicker">Live media transparency</p>
+        <h1 id="hero-title">FactLens</h1>
+        <p class="hero-lede">Context for the news segment in front of you, while it is still playing.</p>
+        <p class="hero-detail">FactLens identifies the story, compares current reporting, surfaces missing context, and shows the evidence behind an experimental framing assessment.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="install.html">Download extension</a>
+          <a class="button button-secondary" href="studio.html">Open Analysis Studio</a>
+        </div>
+        <p class="prototype-label">Research prototype · Chrome-compatible · Human calibration in progress</p>
       </div>
-      <p class="notice">The web studio cannot automatically capture another browser tab. Paste the transcript, page title, or visible text you want FactLens to analyze.</p>
+      <a class="next-section" href="#overview">Explore the product <span aria-hidden="true">↓</span></a>
     </section>
 
-    <section class="workflow" aria-label="Analysis workflow">
-      <span>Enter or load content</span>
-      <span aria-hidden="true">→</span>
-      <span>Build Community Note</span>
-      <span aria-hidden="true">→</span>
-      <span>Review context</span>
-      <span aria-hidden="true">→</span>
-      <span>Run follow-up checks</span>
-    </section>
-
-    <div class="studio-grid">
-      <section class="input-area" aria-labelledby="input-title">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Input</p>
-            <h2 id="input-title">Analyze a segment</h2>
-          </div>
-          <button class="text-button" id="clear-btn" type="button">Clear form</button>
-        </div>
-
-        <form id="analysis-form">
-          <div class="field field-large">
-            <label for="transcript">Transcript or segment text</label>
-            <p class="helper" id="transcript-help">Paste captions, a transcript, or the portion of the discussion you want to review.</p>
-            <textarea id="transcript" rows="14" aria-describedby="transcript-help" placeholder="Paste the segment text here."></textarea>
-          </div>
-
-          <div class="field">
-            <label for="page-title">Page title or headline <span>optional</span></label>
-            <p class="helper" id="title-help">Add the title shown on the page to help FactLens identify the correct story.</p>
-            <input id="page-title" type="text" aria-describedby="title-help" placeholder="Example: Supreme Court hears challenge to social media laws" />
-          </div>
-
-          <div class="field">
-            <label for="screen-text">On-screen text <span>optional</span></label>
-            <p class="helper" id="screen-help">Add banners, lower-thirds, captions, or other visible text.</p>
-            <textarea id="screen-text" rows="5" aria-describedby="screen-help" placeholder="Example: Justices weigh state laws that restrict platform moderation."></textarea>
-          </div>
-
-          <div class="field-row">
-            <div class="field">
-              <label for="outlet">Source domain <span>optional</span></label>
-              <input id="outlet" type="text" placeholder="Example: apnews.com" />
-            </div>
-            <div class="field">
-              <label for="language">Language</label>
-              <select id="language">
-                <option value="english">English</option>
-                <option value="spanish">Spanish</option>
-              </select>
-            </div>
-          </div>
-
-          <section class="samples" aria-labelledby="samples-title">
-            <div class="section-head compact-head">
-              <div>
-                <p class="eyebrow">Samples</p>
-                <h3 id="samples-title">Try demo content</h3>
-              </div>
-            </div>
-            <div class="sample-list" id="sample-list"></div>
-          </section>
-
-          <div class="primary-actions">
-            <button id="build-btn" type="submit">Build Community Note</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="results-area" aria-labelledby="results-title">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Results</p>
-            <h2 id="results-title">Community Note</h2>
-          </div>
-          <p class="activity" id="activity" role="status" aria-live="polite">Ready.</p>
-        </div>
-
-        <article class="note" id="note" tabindex="-1">
-          <p class="placeholder">Build a note to see story context, coverage, and follow-up checks.</p>
+    <section id="overview" class="band overview-band">
+      <div class="section-heading">
+        <p class="kicker">What it does</p>
+        <h2>A second layer for live reporting</h2>
+      </div>
+      <div class="feature-grid">
+        <article>
+          <span class="feature-index">01</span>
+          <h3>Recognizes the story</h3>
+          <p>Uses captions, audio transcription, page titles, and visible text to identify the event being discussed.</p>
         </article>
-
-        <section class="followups" aria-labelledby="followups-title">
-          <div>
-            <p class="eyebrow">Follow-up actions</p>
-            <h3 id="followups-title">Check only when needed</h3>
-          </div>
-          <div class="followup-actions">
-            <button id="claims-btn" type="button" disabled>Check statements</button>
-            <button id="discussion-btn" type="button" disabled>Check public reaction</button>
-          </div>
-        </section>
-
-        <details class="developer-settings">
-          <summary>Developer settings</summary>
-          <p>Most visitors do not need these settings. Use them only when testing with your own provider keys or backend.</p>
-
-          <div class="field">
-            <label for="backend-url">Backend URL override</label>
-            <input id="backend-url" type="url" value="" autocomplete="off" />
-          </div>
-
-          <div class="field-row">
-            <div class="field">
-              <label for="groq-key">Groq API key override</label>
-              <input id="groq-key" type="password" autocomplete="off" />
-            </div>
-            <div class="field">
-              <label for="tavily-key">Tavily API key override</label>
-              <input id="tavily-key" type="password" autocomplete="off" />
-            </div>
-          </div>
-
-          <div class="field">
-            <label for="news-key">NewsAPI key override</label>
-            <input id="news-key" type="password" autocomplete="off" />
-          </div>
-
-          <button class="text-button" id="refresh-status-btn" type="button">Refresh provider status</button>
-          <div class="api-status" id="api-status" hidden></div>
-        </details>
-      </section>
-    </div>
-
-    <section class="methodology" aria-labelledby="methodology-title">
-      <div>
-        <p class="eyebrow">Methodology</p>
-        <h2 id="methodology-title">What the studio does</h2>
+        <article>
+          <span class="feature-index">02</span>
+          <h3>Compares coverage</h3>
+          <p>Finds reporting on the same story and highlights concrete details present elsewhere but absent from the segment.</p>
+        </article>
+        <article>
+          <span class="feature-index">03</span>
+          <h3>Shows its work</h3>
+          <p>Links source articles, quotes exact transcript evidence, timestamps results, and separates outlet history from segment analysis.</p>
+        </article>
+        <article>
+          <span class="feature-index">04</span>
+          <h3>Supports follow-up checks</h3>
+          <p>Runs statement checks and public-reaction summaries only when requested, keeping reporting and public discussion distinct.</p>
+        </article>
       </div>
-      <div class="method-grid">
-        <p>FactLens identifies the story, compares other outlet coverage, and extracts missing context only when the story match is strong enough.</p>
-        <p>Statement checks and public reaction are separate, on-demand steps. Public discussion is not treated as verified reporting.</p>
-        <p>The browser studio does not store transcripts, capture audio, inspect another tab, or expose Railway environment variables to the page.</p>
+    </section>
+
+    <section class="band workflow-band" aria-labelledby="workflow-title">
+      <div class="section-heading">
+        <p class="kicker">How it works</p>
+        <h2 id="workflow-title">From live segment to inspectable note</h2>
+      </div>
+      <ol class="product-flow">
+        <li><strong>Listen</strong><span>Captions or a short audio buffer provide the segment text.</span></li>
+        <li><strong>Match</strong><span>Page signals and current headlines confirm that FactLens found the right story.</span></li>
+        <li><strong>Compare</strong><span>Other reporting supplies source-linked context and coverage distribution.</span></li>
+        <li><strong>Assess</strong><span>A versioned rubric examines framing while server checks reject malformed or invented evidence.</span></li>
+        <li><strong>Review</strong><span>The note appears in the side panel, ready for evidence inspection or optional follow-up checks.</span></li>
+      </ol>
+    </section>
+
+    <section id="method" class="band method-band">
+      <div class="section-heading method-heading">
+        <p class="kicker">How findings are determined</p>
+        <h2>Signals, safeguards, and visible uncertainty</h2>
+        <p>FactLens does not reduce bias to an outlet label. It evaluates the specific segment and exposes the inputs behind the result.</p>
+      </div>
+      <div class="method-layout">
+        <div class="rubric-table" role="table" aria-label="FactLens framing rubric">
+          <div class="rubric-row rubric-head" role="row"><span>Signal</span><span>Question</span></div>
+          <div class="rubric-row" role="row"><strong>Loaded language</strong><span>Is wording neutral or emotionally charged?</span></div>
+          <div class="rubric-row" role="row"><strong>Source balance</strong><span>Are relevant perspectives represented?</span></div>
+          <div class="rubric-row" role="row"><strong>Evidence quality</strong><span>Are claims supported and attributed?</span></div>
+          <div class="rubric-row" role="row"><strong>Missing context</strong><span>Does comparison coverage reveal a material omission?</span></div>
+          <div class="rubric-row" role="row"><strong>Fact/opinion separation</strong><span>Can viewers distinguish reporting from interpretation?</span></div>
+        </div>
+        <aside class="guardrails">
+          <h3>Built-in guardrails</h3>
+          <ul>
+            <li>Low-confidence story matches are withheld.</li>
+            <li>Required scores must be complete and valid.</li>
+            <li>Evidence must occur verbatim in the transcript.</li>
+            <li>Analysis completeness is not presented as accuracy.</li>
+            <li>Political direction remains explicitly experimental.</li>
+          </ul>
+          <a href="studio.html#methodology-title">Inspect the methodology in Studio</a>
+        </aside>
+      </div>
+    </section>
+
+    <section class="band stack-band" aria-labelledby="stack-title">
+      <div class="section-heading">
+        <p class="kicker">Built with</p>
+        <h2 id="stack-title">A focused real-time analysis stack</h2>
+      </div>
+      <div class="stack-grid">
+        <article><h3>Chrome Extension</h3><p>Manifest V3, tab capture, captions, side panel, local settings, and on-demand interaction.</p></article>
+        <article><h3>Node.js + Express</h3><p>API orchestration, validation, caching, rate limits, privacy controls, and Railway hosting.</p></article>
+        <article><h3>Groq</h3><p>Whisper transcription plus structured story, context, framing, and follow-up synthesis.</p></article>
+        <article><h3>NewsAPI</h3><p>Current same-story coverage used for cross-source comparison and missing-context discovery.</p></article>
+        <article><h3>Tavily</h3><p>Grounded web retrieval for optional statement checks and public-reaction research.</p></article>
+        <article><h3>Playwright</h3><p>Desktop, mobile, extension, privacy, API, and live-provider regression testing.</p></article>
+      </div>
+    </section>
+
+    <section id="roadmap" class="band roadmap-band">
+      <div class="section-heading">
+        <p class="kicker">Next-generation TV</p>
+        <h2>A roadmap beyond the browser tab</h2>
+        <p>Potential directions, not shipped commitments.</p>
+      </div>
+      <div class="roadmap-track">
+        <article><span>Now</span><h3>Browser companion</h3><p>Live segment recognition, coverage comparison, framing evidence, and user-requested checks.</p></article>
+        <article><span>Next</span><h3>Human calibration</h3><p>Diverse blind-review panels, inter-rater agreement, multi-pass abstention, and claim-level evidence matching.</p></article>
+        <article><span>Explore</span><h3>Connected TV overlay</h3><p>ATSC 3.0 and HbbTV companion experiences, QR handoff, remote-friendly notes, and second-screen synchronization.</p></article>
+        <article><span>Future</span><h3>Viewer-controlled context</h3><p>Opt-in household profiles, multilingual accessibility, broadcaster provenance feeds, and privacy-preserving on-device transcription.</p></article>
+      </div>
+    </section>
+
+    <section class="download-band" aria-labelledby="download-title">
+      <div>
+        <p class="kicker">Try the prototype</p>
+        <h2 id="download-title">Bring FactLens into the browser</h2>
+        <p>The guided installer packages the current extension and connects it to the hosted FactLens backend.</p>
+      </div>
+      <div class="download-actions">
+        <a class="button button-primary" href="install.html">Open installer</a>
+        <a class="text-link" href="studio.html">Use the web studio instead</a>
       </div>
     </section>
   </main>
 
-  <script src="samples.js"></script>
-  <script src="app.js"></script>
+  <footer>
+    <div class="product-brand"><img src="factlens-mark.png" alt="" width="28" height="28" /><span>FactLens</span></div>
+    <p>Experimental media-transparency research prototype.</p>
+    <nav aria-label="Footer navigation"><a href="studio.html">Studio</a><a href="review.html">Blind review</a><a href="install.html">Install</a></nav>
+  </footer>
 </body>
 </html>

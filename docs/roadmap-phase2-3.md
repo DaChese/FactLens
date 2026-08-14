@@ -13,7 +13,7 @@ planning reference.
 
 ### What carries over unchanged
 
-- **The entire backend.** `/transcribe`, `/factcheck`, `/bias`, and `/coverage` are
+- **The entire backend.** `/transcribe`, `/factcheck`, `/discussion`, and `/coverage` are
   source-agnostic — they take audio and text, not "a YouTube tab." Nothing changes.
 - **Audio transcription as the primary pipeline.** Whisper doesn't care whether the
   audio came from a YouTube player or a live broadcast stream.
@@ -75,10 +75,10 @@ What transfers:
 
 | Layer | Transfers? |
 |---|---|
-| Backend APIs (`/factcheck`, `/bias`, `/coverage`) | ✅ As-is, once hosted (not localhost) |
+| Backend APIs (`/factcheck`, `/discussion`, `/coverage`) | Reusable once hosted and authenticated |
 | Sidebar UI (vanilla HTML/CSS/JS) | 🟡 Largely reusable — A/344 apps are HTML5, but need TV-safe layout + remote-control navigation |
 | Audio capture pipeline | ❌ Replaced — the receiver already has the AV stream; captions arrive as IMSC1/CEA-708, which the app can read directly (better than Whisper) |
-| Bias ratings + coverage logic | ✅ As-is |
+| Framing analysis + coverage logic | Reusable, but requires calibration and human review before production editorial use |
 
 ### Two viable deployment shapes
 

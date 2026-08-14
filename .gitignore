@@ -21,3 +21,6 @@ npm-debug.log*
 # Playwright artifacts
 backend/test-results/
 backend/playwright-report/
+
+# Privacy-preserving local calibration records (hashes/scores only)
+backend/runtime/

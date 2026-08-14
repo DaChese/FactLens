@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 async function loadStudio(page) {
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto('/studio.html', { waitUntil: 'domcontentloaded' });
   await page.locator('#transcript').fill('A short segment about a public policy update with enough words to analyze.');
   await page.locator('#page-title').fill('Officials announce public policy update');
 }
@@ -118,6 +118,26 @@ test.describe('FactLens studio edge cases', () => {
             { text: '<b>Markup should render as text</b>', outlet: 'Trusted Outlet', url: 'https://example.com/context' },
           ],
           outlet_bias: { name: 'Watched Outlet', rating: 'center' },
+          framing_analysis: {
+            direction: 'mixed',
+            framing_intensity: 44,
+            reliability: 82,
+            dimensions: {
+              loaded_language: 25,
+              source_balance: 61,
+              evidence_quality: 82,
+              missing_context: 40,
+              fact_opinion_separation: 91,
+            },
+            evidence: [{
+              dimension: 'source_balance',
+              excerpt: 'A short segment',
+              explanation: '<em>Only one viewpoint appears.</em>',
+            }],
+            confidence: { score: 72, label: 'medium', comparison_sources: 2 },
+            analyzed_at: '2026-08-14T18:00:00.000Z',
+            methodology_version: '1.0',
+          },
         }),
       });
     });
@@ -127,6 +147,11 @@ test.describe('FactLens studio edge cases', () => {
 
     await expect(page.getByText('<script>window.__factlensUnsafe = true</script> Policy update')).toBeVisible();
     await expect(page.getByText('<b>Markup should render as text</b>')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Experimental framing analysis' })).toBeVisible();
+    await expect(page.getByText(/Political direction is not yet calibrated/)).toBeVisible();
+    await expect(page.getByText('44/100')).toBeVisible();
+    await page.getByText('Review 1 evidence excerpt').click();
+    await expect(page.getByText('<em>Only one viewpoint appears.</em>')).toBeVisible();
     await expect(page.locator('script', { hasText: 'window.__factlensUnsafe' })).toHaveCount(0);
     await expect(page.locator('a[href^="javascript:"]')).toHaveCount(0);
     await expect(page.getByRole('link', { name: 'Safe article title' })).toHaveAttribute('href', 'https://example.com/story');
@@ -141,9 +166,11 @@ test.describe('FactLens studio edge cases', () => {
 
     await page.route('**/coverage', async (route) => {
       const headers = route.request().headers();
+      const requestBody = route.request().postDataJSON();
       expect(headers['x-groq-key']).toBe(secret.groq);
       expect(headers['x-tavily-key']).toBe(secret.tavily);
       expect(headers['x-newsapi-key']).toBe(secret.news);
+      expect(requestBody.review_opt_in).toBe(true);
 
       await route.fulfill({
         status: 200,
@@ -168,6 +195,7 @@ test.describe('FactLens studio edge cases', () => {
     await page.locator('#groq-key').fill(secret.groq);
     await page.locator('#tavily-key').fill(secret.tavily);
     await page.locator('#news-key').fill(secret.news);
+    await page.locator('#review-opt-in').check();
     await page.getByRole('button', { name: 'Build Community Note' }).click();
 
     await expect(page.getByText('Provider override test', { exact: true })).toBeVisible();

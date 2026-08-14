@@ -6,6 +6,55 @@ True/False verdict cards, and a bias meter, analyzing everything automatically e
 20 seconds. It is now a **Community Notes tool for live video**: on-demand, evidence-
 gated, monochrome, and ~98% cheaper to run.
 
+## v1.8.0 - Railway product experience and extension package (2026-08-14)
+
+- Replaced the Railway root Studio screen with a responsive FactLens product page.
+- Documented the workflow, findings methodology, API providers, technical stack, and
+  potential next-generation TV roadmap at the point of discovery.
+- Moved the manual Analysis Studio to `/studio.html` and kept blind review at
+  `/review.html`.
+- Added `/install.html` with a transparent Chrome developer-mode flow and a hosted
+  `factlens-extension.zip` download.
+- Updated the packaged extension to use Railway by default while retaining localhost
+  permission for development.
+- Added desktop and mobile product/installer regression coverage.
+
+## v1.7.0 - Blind review and calibration foundation (2026-08-14)
+
+- Added explicit Studio opt-in for de-branded blind review samples.
+- Added a `/review.html` workspace that hides automated results until an independent
+  rubric review is submitted and locked.
+- Added `/reviews` queue, submission, summary, and statistics endpoints with duplicate
+  prevention based on hashed reviewer sessions.
+- Raw opted-in transcripts remain memory-only. Persistent JSONL contains hashes,
+  scores, timestamps, methodology provenance, and anonymized reviewer metadata.
+- Added calibration summaries for reviewer count, perspective coverage, direction
+  agreement, and mean framing/reliability.
+- Added fixed framing fixtures with invalid-quote, strict-score, abstention, and randomized
+  source-order checks, plus privacy/duplicate/agreement store tests.
+- Versioned the outlet-history dataset and attached methodology, review date, and
+  reference-source metadata.
+- Enabled Groq JSON-object response mode for combined context/framing synthesis after
+  live testing exposed intermittent unparseable output.
+- Completed the real-provider suite with Groq, NewsAPI, Tavily fact checking, and
+  Tavily public reaction configured locally.
+- Labeled framing and political direction as experimental and uncalibrated in both
+  the Studio and Chrome extension.
+
+## v1.6.0 - Evidence-backed framing analysis (2026-08-14)
+
+- Added dynamic target-transcript framing analysis to `/coverage`, separate from
+  static outlet-history labels.
+- Added apparent direction, framing intensity, reliability, five rubric dimensions,
+  exact evidence excerpts, backend-derived confidence, timestamp, and methodology
+  version to the response.
+- Evidence excerpts are accepted only when they occur verbatim in the transcript.
+- The Analysis Studio and Chrome sidebar render the assessment and expandable evidence trail.
+- Missing-context extraction and framing share one Groq synthesis call, keeping a
+  complete note at up to four provider calls rather than five.
+- Added Playwright coverage for extension-sidebar message handling, evidence safety,
+  provenance, and score rendering.
+
 ---
 
 ## v1.5.0 — Retry-until-confident, public reaction, trust fixes (2026-07-10/11)

@@ -57,6 +57,7 @@
       articles:       [],
       coverage:       null,
       missingContext: [],
+      framingAnalysis: null,
       claims:         [],
       claimsChecked:  false, // "Check statements" has been run for this note
       discussion:        null,  // { summary, sources } from /discussion
@@ -223,7 +224,7 @@
     if (payload.outlet_bias) {
       outletBadge.hidden = false;
       outletBadge.textContent =
-        `Watching: ${payload.outlet_bias.name} (${BIAS_LABELS[payload.outlet_bias.rating] ?? payload.outlet_bias.rating})`;
+        `Outlet history: ${payload.outlet_bias.name} (${BIAS_LABELS[payload.outlet_bias.rating] ?? payload.outlet_bias.rating})`;
     }
 
     if (payload.available === false) {
@@ -252,6 +253,7 @@
     currentNote.articles       = payload.articles ?? [];
     currentNote.coverage       = payload.coverage ?? null;
     currentNote.missingContext = payload.missing_context ?? [];
+    currentNote.framingAnalysis = payload.framing_analysis ?? null;
     renderNotes();
   }
 
@@ -348,6 +350,10 @@
     // note's content overall ──
     if (note.story) {
       parts.push(buildRatingRow(note));
+    }
+
+    if (note.framingAnalysis) {
+      parts.push(...buildFramingAnalysis(note.framingAnalysis));
     }
 
     // ── Context other outlets reported (the heart of the note) ──
@@ -491,6 +497,85 @@
       parts.push(actions);
     }
 
+    return parts;
+  }
+
+  function scoreText(value) {
+    return `${Math.round(Math.max(0, Math.min(100, Number(value) || 0)))}/100`;
+  }
+
+  function framingLabel(value) {
+    return ({
+      loaded_language: 'Loaded language',
+      source_balance: 'One-sided sourcing',
+      evidence_quality: 'Evidence quality',
+      missing_context: 'Missing context',
+      fact_opinion_separation: 'Fact/opinion separation',
+    })[value] || value;
+  }
+
+  function buildFramingAnalysis(analysis) {
+    const parts = [subheading('Experimental segment framing')];
+    const notice = document.createElement('p');
+    notice.className = 'fl-experimental-notice';
+    notice.textContent = 'Prototype assessment. Political direction is not yet human-calibrated.';
+    parts.push(notice);
+    const summary = document.createElement('dl');
+    summary.className = 'fl-framing-summary';
+    [
+      ['Experimental direction', BIAS_LABELS[analysis.direction] ?? analysis.direction ?? 'unclear'],
+      ['Framing intensity', scoreText(analysis.framing_intensity)],
+      ['Reliability', scoreText(analysis.reliability)],
+      ['Analysis completeness', `${analysis.confidence?.label ?? 'unknown'} (${scoreText(analysis.confidence?.score)})`],
+    ].forEach(([label, value]) => {
+      const item = document.createElement('div');
+      const term = document.createElement('dt');
+      const detail = document.createElement('dd');
+      term.textContent = label;
+      detail.textContent = value;
+      item.append(term, detail);
+      summary.appendChild(item);
+    });
+    parts.push(summary);
+
+    const dimensions = document.createElement('dl');
+    dimensions.className = 'fl-framing-dimensions';
+    Object.entries(analysis.dimensions ?? {}).forEach(([name, value]) => {
+      const term = document.createElement('dt');
+      const detail = document.createElement('dd');
+      term.textContent = framingLabel(name);
+      detail.textContent = scoreText(value);
+      dimensions.append(term, detail);
+    });
+    parts.push(dimensions);
+
+    if (Array.isArray(analysis.evidence) && analysis.evidence.length > 0) {
+      const details = document.createElement('details');
+      details.className = 'fl-framing-evidence';
+      const toggle = document.createElement('summary');
+      toggle.textContent = `Review ${analysis.evidence.length} evidence excerpt${analysis.evidence.length === 1 ? '' : 's'}`;
+      details.appendChild(toggle);
+      analysis.evidence.forEach((item) => {
+        const finding = document.createElement('div');
+        finding.className = 'fl-framing-finding';
+        const label = document.createElement('strong');
+        const quote = document.createElement('blockquote');
+        const explanation = document.createElement('p');
+        label.textContent = framingLabel(item.dimension);
+        quote.textContent = item.excerpt ?? '';
+        explanation.textContent = item.explanation ?? '';
+        finding.append(label, quote, explanation);
+        details.appendChild(finding);
+      });
+      parts.push(details);
+    }
+
+    const provenance = document.createElement('p');
+    provenance.className = 'fl-framing-provenance';
+    const sourceCount = analysis.confidence?.comparison_sources ?? 0;
+    const analyzedAt = analysis.analyzed_at ? new Date(analysis.analyzed_at).toLocaleString() : 'time unavailable';
+    provenance.textContent = `Method ${analysis.methodology_version ?? 'unknown'} | ${sourceCount} comparison source${sourceCount === 1 ? '' : 's'} | ${analyzedAt}`;
+    parts.push(provenance);
     return parts;
   }
 

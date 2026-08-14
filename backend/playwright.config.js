@@ -30,7 +30,7 @@ export default defineConfig({
     {
       name: 'mobile',
       use: { ...devices['Pixel 7'] },
-      testMatch: /studio-smoke\.spec\.js/,
+      testMatch: /(studio-smoke|review-workflow|product-page)\.spec\.js/,
     },
   ],
 });

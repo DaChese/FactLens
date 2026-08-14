@@ -11,6 +11,10 @@ const playwrightArgs = ['test'];
 if (!live) {
   playwrightArgs.push('tests/studio-smoke.spec.js');
   playwrightArgs.push('tests/studio-edge.spec.js');
+  playwrightArgs.push('tests/extension-sidebar.spec.js');
+  playwrightArgs.push('tests/review-workflow.spec.js');
+  playwrightArgs.push('tests/reviews-api.spec.js');
+  playwrightArgs.push('tests/product-page.spec.js');
 }
 
 const child = spawn(

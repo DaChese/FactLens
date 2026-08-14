@@ -14,6 +14,7 @@
     outlet: document.getElementById('outlet'),
     screenText: document.getElementById('screen-text'),
     language: document.getElementById('language'),
+    reviewOptIn: document.getElementById('review-opt-in'),
     form: document.getElementById('analysis-form'),
     buildBtn: document.getElementById('build-btn'),
     clearBtn: document.getElementById('clear-btn'),
@@ -139,6 +140,7 @@
       onScreenText: els.screenText.value.trim(),
       outlet: els.outlet.value.trim(),
       language: els.language.value,
+      reviewOptIn: els.reviewOptIn.checked,
     };
   }
 
@@ -158,6 +160,7 @@
       coverage: raw.coverage || null,
       missingContext: Array.isArray(raw.missing_context) ? raw.missing_context : [],
       outletBias: raw.outlet_bias || null,
+      framingAnalysis: raw.framing_analysis || null,
       claims: null,
       discussion: null,
     };
@@ -274,15 +277,83 @@
     if (note.query) storySection.appendChild(el('p', 'note-meta', `Search query: ${note.query}`));
     storySection.appendChild(el('p', 'note-meta', storyMatchText(note)));
     if (note.outletBias) {
-      storySection.appendChild(el('p', 'note-meta', `Watched source: ${note.outletBias.name} (${biasLabel(note.outletBias.rating)})`));
+      storySection.appendChild(el('p', 'note-meta', `Outlet history: ${note.outletBias.name} (${biasLabel(note.outletBias.rating)}). This is a reference label, not this segment's score.`));
     }
     els.note.appendChild(storySection);
 
+    renderFramingAnalysis(note);
     renderMissingContext(note);
     renderCoverage(note);
     if (note.claims) renderClaims(note.claims);
     if (note.discussion) renderDiscussion(note.discussion);
     syncFollowups();
+  }
+
+  function scoreLabel(value) {
+    const score = Math.max(0, Math.min(100, Number(value) || 0));
+    return `${Math.round(score)}/100`;
+  }
+
+  function dimensionLabel(value) {
+    return ({
+      loaded_language: 'Loaded language',
+      source_balance: 'One-sided sourcing',
+      evidence_quality: 'Evidence quality',
+      missing_context: 'Missing context',
+      fact_opinion_separation: 'Fact/opinion separation',
+    })[value] || value;
+  }
+
+  function renderFramingAnalysis(note) {
+    const section = el('section', 'result-section');
+    append(section, el('h3', null, 'Experimental framing analysis'));
+    section.appendChild(el('p', 'experimental-notice', 'Prototype assessment. Political direction is not yet calibrated against a diverse human review set.'));
+    const analysis = note.framingAnalysis;
+    if (note.lowConfidence) {
+      section.appendChild(el('p', 'placeholder', 'Framing analysis is withheld until the story match is reliable.'));
+    } else if (!analysis) {
+      section.appendChild(el('p', 'placeholder', 'Not enough target text and comparison coverage to assess framing.'));
+    } else {
+      const summary = el('div', 'score-grid');
+      [
+        ['Experimental direction', biasLabel(analysis.direction)],
+        ['Framing intensity', scoreLabel(analysis.framing_intensity)],
+        ['Reliability', scoreLabel(analysis.reliability)],
+        ['Analysis completeness', `${analysis.confidence?.label || 'unknown'} (${scoreLabel(analysis.confidence?.score)})`],
+      ].forEach(([label, value]) => {
+        const item = el('div', 'score-item');
+        append(item, el('span', 'score-label', label), el('strong', null, value));
+        summary.appendChild(item);
+      });
+      section.appendChild(summary);
+
+      const dimensions = el('dl', 'dimension-list');
+      Object.entries(analysis.dimensions || {}).forEach(([name, value]) => {
+        append(dimensions, el('dt', null, dimensionLabel(name)), el('dd', null, scoreLabel(value)));
+      });
+      section.appendChild(dimensions);
+
+      if (Array.isArray(analysis.evidence) && analysis.evidence.length) {
+        const evidence = el('details', 'evidence-details');
+        evidence.appendChild(el('summary', null, `Review ${analysis.evidence.length} evidence excerpt${analysis.evidence.length === 1 ? '' : 's'}`));
+        const list = el('ul', 'evidence-list');
+        analysis.evidence.forEach(item => {
+          const li = el('li');
+          append(li,
+            el('strong', null, dimensionLabel(item.dimension)),
+            el('blockquote', null, item.excerpt),
+            el('p', 'note-meta', item.explanation)
+          );
+          list.appendChild(li);
+        });
+        evidence.appendChild(list);
+        section.appendChild(evidence);
+      }
+
+      const sourceCount = analysis.confidence?.comparison_sources ?? 0;
+      section.appendChild(el('p', 'methodology-meta', `Method ${analysis.methodology_version || 'unknown'} | ${sourceCount} comparison source${sourceCount === 1 ? '' : 's'} | ${analysis.analyzed_at ? new Date(analysis.analyzed_at).toLocaleString() : 'time unavailable'}`));
+    }
+    els.note.appendChild(section);
   }
 
   function storyMatchText(note) {
@@ -444,6 +515,7 @@
           outlet: input.outlet || null,
           pageTitle: input.pageTitle || null,
           onScreenText: input.onScreenText || null,
+          review_opt_in: input.reviewOptIn,
         }),
       });
       state.currentNote = normalizeNote(raw);
@@ -584,6 +656,7 @@
     els.pageTitle.value = '';
     els.outlet.value = '';
     els.screenText.value = '';
+    els.reviewOptIn.checked = false;
     state.currentNote = null;
     state.currentInput = null;
     state.coverageStatus = 'idle';

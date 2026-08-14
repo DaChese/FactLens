@@ -5,14 +5,19 @@ Instead of continuously fact-checking every sentence, it opens a side panel, let
 the viewer press **Start**, collects local context from the current tab, and then
 builds one neutral note about the story being discussed.
 
-The current `main` branch is v1.5.0. It is local-development focused: the backend
-runs on your machine, and the extension talks to `http://localhost:3001` unless
-you change the backend URL in the extension settings page.
+The current working version is v1.8.0. The downloadable extension uses the hosted
+Railway service by default; developers can switch its backend setting to
+`http://localhost:3001` for local work.
 
-The backend also serves the FactLens Analysis Studio from `/`. This is useful for
-Railway hosting and demos: visitors can paste transcript/page text, build a
+The backend serves a public product page from `/` and the FactLens Analysis Studio
+from `/studio.html`. In Studio, visitors can paste transcript/page text, build a
 Community Note, and run the same `/coverage`, `/factcheck`, and `/discussion`
 pipeline without installing the Chrome extension.
+
+The backend also serves a blind-review workspace at `/review.html`. Studio users can
+explicitly opt a transcript into the local review queue. Reviewers see de-branded text
+without automated scores, submit the same rubric independently, and see aggregate
+agreement only after their review is locked.
 
 ## Current Behavior
 
@@ -52,14 +57,28 @@ Each Community Note can include:
 - A match-evidence line showing whether the note matched on transcript,
   on-screen text, and/or other outlets' headlines.
 - Context that other outlets reported but the watched segment did not mention.
-- A list of other outlets covering the story, labeled with static editorial-lean
-  ratings from `backend/data/bias-ratings.json`.
+- Article-level framing analysis of the target transcript: apparent direction,
+  framing intensity, reliability, five rubric dimensions, analysis completeness, timestamp,
+  methodology version, and exact supporting excerpts.
+- A list of other outlets covering the story. Static editorial-lean labels from
+  `backend/data/bias-ratings.json` are shown only as outlet-history context, not as
+  the score of an individual article or segment.
 - Optional statement checks labeled **Confirmed**, **Disputed**, or **Unclear**.
 - Optional public reaction summary, kept separate from outlet coverage.
 - A "Right story?" helpful/not-helpful control.
 
-FactLens intentionally avoids the old colored TRUE/FALSE feed and bias meter. The
-UI is a monochrome newsprint-style sidebar, with green/red reserved for Start/Stop.
+The backend returns framing analysis for confident transcript-based `/coverage`
+requests. Both the Analysis Studio and Chrome sidebar render the scores, provenance,
+and expandable evidence audit trail.
+
+Framing and political direction are visibly labeled **experimental** in both surfaces.
+They are prototype assessments, not calibrated political-bias determinations. Until a
+diverse human review set establishes validity, exact evidence and observable rubric
+dimensions should carry more weight than the direction label.
+
+FactLens intentionally avoids the old unexplained, single-number bias meter. Framing
+and reliability are separate, evidence-backed measurements. The UI is a monochrome
+newsprint-style sidebar, with green/red reserved for Start/Stop.
 
 ## Built With
 
@@ -70,7 +89,8 @@ UI is a monochrome newsprint-style sidebar, with green/red reserved for Start/St
 | Story ID and synthesis | Groq chat models (`llama-3.3-70b-versatile`, with `llama-3.1-8b-instant` as the fast story-ID model) |
 | Statement/public-reaction search | Tavily Search API |
 | Coverage search | NewsAPI |
-| Outlet ratings | Static JSON dataset in `backend/data/bias-ratings.json` |
+| Framing analysis | Groq rubric applied to the target transcript, checked against NewsAPI coverage |
+| Outlet history | Static JSON dataset in `backend/data/bias-ratings.json` |
 | Backend | Node.js + Express |
 | UI | Vanilla JS + CSS |
 | Web studio | Static HTML/CSS/JS served from `backend/public` |
@@ -81,7 +101,7 @@ UI is a monochrome newsprint-style sidebar, with green/red reserved for Start/St
 - Node.js for the backend.
 - A Groq API key for transcription and LLM calls.
 - A Tavily API key for statement checks and public reaction.
-- A NewsAPI key for coverage comparison and missing-context notes.
+- A NewsAPI key for coverage comparison, missing-context notes, and framing analysis.
 
 The backend can start without keys in `.env`, because the extension can send keys
 per request from the settings page. Requests that need a missing key will fail with
@@ -146,10 +166,10 @@ Header keys take priority over `.env`. Blank settings fall back to `.env`.
 With the backend running, open:
 
 ```text
-http://localhost:3001/
+http://localhost:3001/studio.html
 ```
 
-On Railway, the same page is served from the Railway service URL. The web studio
+On Railway, `/` serves the product page and `/studio.html` serves this tool. The web studio
 does not have Chrome extension privileges, so it cannot inspect another tab's DOM,
 capture audio, or capture captions automatically. It is a hosted manual analysis
 surface for pasted transcripts, page titles, source domains, and on-screen text.
@@ -159,8 +179,11 @@ The studio workflow is:
 1. Paste transcript or segment text.
 2. Optionally add a page title, on-screen text, source domain, and language.
 3. Press **Build Community Note**.
-4. Review the identified story, match signals, missing context, and other coverage.
+4. Review the identified story, framing analysis, evidence excerpts, missing context,
+   and other coverage.
 5. Optionally press **Check statements** or **Check public reaction**.
+6. Optionally opt the transcript into the local blind-review queue, then open the
+   review workspace to collect independent assessments.
 
 The page includes three clearly labeled sample inputs and a collapsed **Developer
 settings** section for backend URL and API-key overrides. These overrides preserve
@@ -219,11 +242,30 @@ When a note is built:
 6. `/coverage` cross-checks the story against on-screen text and returned
    headlines using keyword overlap.
 7. If confidence is low, articles and missing-context items are withheld.
-8. If confidence is sufficient and transcript text exists, Groq extracts up to 3
-   missing-context facts from other coverage.
+8. If confidence is sufficient and transcript text exists, one combined Groq synthesis
+   call extracts up to 3 missing-context facts and evaluates the target transcript
+   with the versioned framing rubric.
+9. Framing evidence is accepted only when its quoted excerpt occurs verbatim in the
+   target transcript. The displayed analysis-completeness value describes available
+   comparison inputs and validated excerpts; it is not accuracy confidence.
 
 Coverage results are cached by query for 10 minutes. Claim results are cached for
 1 hour.
+
+### Blind review and audit storage
+
+- Review opt-in is off by default and is currently available in the Analysis Studio.
+- Opted-in raw transcripts remain only in the backend's in-memory review queue and
+  disappear when the server restarts.
+- `backend/runtime/analysis-audits.jsonl` stores transcript hashes, automated rubric
+  values, methodology provenance, and timestamps. It excludes raw transcripts, story
+  titles, evidence excerpts, and explanations derived from transcript text.
+- `backend/runtime/blind-reviews.jsonl` stores rubric scores and hashed reviewer
+  sessions. It does not store raw transcripts or browser identifiers.
+- `backend/runtime/` is ignored by Git. Set `FACTLENS_DATA_DIR` to use another runtime
+  location with appropriate access controls and retention policy.
+- Review endpoints fail closed unless `REVIEWER_ACCESS_TOKEN` is configured. Reviewers
+  enter that shared panel token in the review workspace; it is kept in session storage.
 
 ### On-demand followups
 
@@ -241,16 +283,34 @@ Coverage results are cached by query for 10 minutes. Claim results are cached fo
 | `GET /health` | Basic server health check |
 | `GET /status` | Provider status, call counts, and budget state |
 | `POST /transcribe` | Send one audio blob to Groq Whisper |
-| `POST /coverage` | Identify story, find coverage, cross-check confidence, extract missing context |
+| `POST /coverage` | Identify story, find coverage, gate confidence, extract missing context, and analyze target framing |
 | `POST /coverage/feedback` | Evict cached coverage on not-helpful feedback |
 | `POST /factcheck` | On-demand statement checking |
 | `POST /discussion` | On-demand public-reaction summary |
+| `GET /reviews/queue` | Return the next memory-only blind sample for a reviewer session |
+| `POST /reviews/:sampleId` | Submit one locked, independent rubric review |
+| `GET /reviews/summary/:sampleId` | Return aggregate agreement and automated comparison data |
+| `GET /reviews/stats` | Return queue and persisted calibration counts |
 
 The old `/bias` route has been removed.
 
+## Evaluation Commands
+
+```bash
+cd factlens/backend
+npm run test:framing
+npm run test:reviews
+```
+
+`test:framing` runs fixed fixtures through strict score validation, abstention,
+verbatim-evidence checks, and randomized comparison-source ordering. `test:reviews`
+verifies duplicate prevention, agreement summaries, transcript hashing, and that raw
+transcripts are absent from persistent files. These are regression checks, not a claim
+that the model has been politically calibrated; real multi-reviewer data is still needed.
+
 ## Railway Hosting
 
-Railway can host the backend API and web studio as one Node service:
+Railway can host the product site, extension package, Studio, and backend API as one Node service:
 
 1. Point Railway at `backend/` as the service root.
 2. Use `npm start` as the start command.
@@ -258,7 +318,8 @@ Railway can host the backend API and web studio as one Node service:
    or leave them blank and enter keys in the web studio developer settings.
 4. Optional: set `PUBLIC_ORIGIN` to your public Railway/custom domain if you put
    the frontend and API on different origins.
-5. Open the Railway public URL. `/` serves the web studio; API routes remain
+5. Open the Railway public URL. `/` serves the product page, `/install.html` serves
+   the guided installer, and `/studio.html` serves the web studio. API routes remain
    available under `/coverage`, `/factcheck`, `/discussion`, `/transcribe`,
    `/health`, and `/status`.
 
@@ -275,7 +336,7 @@ npm run test:studio
 
 This checks `/health`, `/status`, provider variable visibility, the deployed studio
 shell, sample loading, clear-form behavior, empty validation, developer settings,
-and desktop/mobile layouts.
+desktop/mobile layouts, and Chrome-sidebar framing rendering with a mocked runtime.
 
 Live provider check:
 
@@ -284,7 +345,8 @@ cd factlens/backend
 npm run test:studio:live
 ```
 
-This builds a real Community Note and runs statement and public-reaction checks.
+This builds a real Community Note, requires rendered framing scores and methodology
+provenance, and runs statement and public-reaction checks.
 Use it intentionally because it spends Groq, NewsAPI, and Tavily calls.
 
 By default the runner targets:
@@ -319,13 +381,23 @@ factlens/
 |   |-- playwright.config.js
 |   |-- .env.example
 |   |-- public/
-|   |   |-- index.html
+|   |   |-- index.html (product page)
+|   |   |-- studio.html
+|   |   |-- install.html
+|   |   |-- product.css
+|   |   |-- install.css
+|   |   |-- downloads/factlens-extension.zip
 |   |   |-- samples.js
 |   |   |-- styles.css
 |   |   `-- app.js
 |   |-- scripts/
+|   |   |-- run-framing-eval.js
 |   |   `-- run-studio-tests.js
 |   |-- tests/
+|   |   |-- extension-sidebar.spec.js
+|   |   |-- fixtures/framing-eval.json
+|   |   |-- review-workflow.spec.js
+|   |   |-- studio-edge.spec.js
 |   |   |-- studio-live.spec.js
 |   |   `-- studio-smoke.spec.js
 |   |-- data/
@@ -367,9 +439,8 @@ factlens/
 
 ## Operational Notes
 
-- The extension host permissions currently allow `http://localhost:3001/*`.
-  For a hosted backend, update `extension/manifest.json` and the backend URL in
-  settings.
+- The extension host permissions allow the Railway deployment and
+  `http://localhost:3001/*` for local development.
 - `backend/lib/rateLimit.js` contains route throttles and provider budget caps.
 - `GET /status` powers the settings page API status panel.
 - The backend caches are in memory and reset when the server restarts.
@@ -377,6 +448,6 @@ factlens/
 
 ## Version
 
-Current README target: `main` at v1.5.0.
+Current README target: v1.8.0.
 
 See `CHANGELOG.md` for the detailed version history.

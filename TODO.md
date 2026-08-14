@@ -1,32 +1,46 @@
 # FactLens — TODO
 
-Punch list as of 2026-07-10 (v1.4.0+, plus this session's retry/thumbs/pause work —
-see below). Ordered roughly by priority for the capstone demo.
+Punch list updated 2026-08-14 for v1.7.0. Ordered roughly by priority for the capstone demo.
 See also: `docs/demo-script.md` (the run-of-show + pre-demo checklist, in full detail),
 `docs/ai-methodology.md`, `docs/ethics-and-trust.md`, `docs/user-journey.md`.
 
 ## Documentation debt (highest priority — these get quoted live in front of judges)
 
-None of the following are mentioned anywhere in `README.md`, `CHANGELOG.md`, or
-`docs/` — confirmed by grep, not assumption:
+The following documentation work is complete:
 
-- [ ] **`docs/ai-methodology.md`** doesn't mention the retry/refinement loop
+- [x] **`docs/ai-methodology.md`** documents the retry/refinement loop
       (`autoRunAndStop` in `extension/background.js`): a miss doesn't give up, it
       retries up to 3x, and each retry hands the model its own previous guess to
       confirm/refine/correct with new evidence (`previousGuess` in
       `backend/routes/coverage.js`). This is a genuinely strong "agentic AI" talking
       point that's currently invisible to whoever presents this.
-- [ ] **`docs/demo-script.md`** doesn't account for a session that retries — add a
+- [x] **`docs/demo-script.md`** accounts for a session that retries — add a
       line to the run-of-show and Q&A prep for what a retry looks like live, since it
       may well happen during the actual demo.
-- [ ] **`docs/ethics-and-trust.md`** doesn't cover the thumbs up/down mechanism
+- [x] **`docs/ethics-and-trust.md`** covers the thumbs up/down mechanism
       (`POST /coverage/feedback`) — directly relevant to the "trust framework" framing
       the doc already argues for elsewhere.
-- [ ] **`CHANGELOG.md`** stops at v1.4.0 — nothing from the retry logic, thumbs
+- [x] **`CHANGELOG.md`** records post-v1.4.0 retry, feedback, and framing work — thumbs
       up/down + cache invalidation, pause-awareness, or the broadened JSON-LD/Twitter
       Card page-signal scraping is recorded.
-- [ ] **`extension/manifest.json`** version is still `1.4.0` despite several rounds of
+- [x] **`extension/manifest.json`** is versioned for the current feature set after several rounds of
       real feature work since — bump it before it ships/demos.
+
+## Framing analysis follow-up (2026-08-14)
+
+- [x] Render `framing_analysis` in the Chrome sidebar with scores, dimensions,
+      confidence provenance, and expandable evidence.
+- [x] Built the blind review workflow and agreement summaries. Real diverse reviewer
+      recruitment and threshold calibration remain fieldwork, not implementation.
+- [x] Persist versioned audit/review records with timestamps, hashes, scores, reviewer
+      counts, and agreement while keeping raw transcripts memory-only.
+- [x] Added repeated source-order, strict-score, abstention, and quote-validation fixtures.
+- [ ] Measure and reduce live model variance: three equivalent provider-backed runs
+      all produced valid framing evidence, but direction alternated between `center`
+      and `unclear`. Do not treat direction as calibrated until reviewed.
+- [x] Added version, methodology, review date, and reference sources to outlet history.
+- [ ] Record a real multi-perspective review set and publish inter-rater metrics.
+- [ ] Replace prototype outlet mappings with licensed data or per-outlet sourced reviews.
 
 ## Must do before the demo
 
@@ -49,7 +63,7 @@ None of the following are mentioned anywhere in `README.md`, `CHANGELOG.md`, or
 
 ## Should do (quality / credibility)
 
-- [ ] **`docs/architecture.md` is stale** — it describes the old continuous pipeline and
+- [x] **`docs/architecture.md` is current** — it describes the on-demand pipeline and
       bias meter. Update it to the on-demand Community Note flow (or delete it and let
       README + CHANGELOG carry it).
 - [ ] **Team review of `backend/data/bias-ratings.json`.** The ~48 outlet ratings are
@@ -174,9 +188,9 @@ this section is as much for the pitch as for the code.)
 
 ## Testing / robustness
 
-- [ ] No automated tests anywhere in the project (extension or backend) — reasonable
-      for a hackathon timeline, but worth naming explicitly as a known gap rather than
-      an oversight.
+- [x] Browser-level Studio smoke and edge tests exist under `backend/tests/`.
+- [x] Added automated sidebar message/rendering coverage for framing analysis.
+- [ ] Add a full unpacked-extension integration test covering the service worker and side panel.
 - [ ] **Multi-tab edge case**: `CHECK_CLAIMS`/`CHECK_DISCUSSION` resolve the note's
       tab via "the first tab with note data" (`Object.keys(lastNoteTranscript)[0]` in
       `extension/background.js`) — correct for the realistic single-session case, but
